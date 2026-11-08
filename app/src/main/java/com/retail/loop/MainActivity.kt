@@ -43,9 +43,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.Player
+import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.database.StandaloneDatabaseProvider
 import androidx.media3.datasource.DataSpec
@@ -86,6 +89,8 @@ class MainActivity : ComponentActivity() {
     private var overlay by mutableStateOf(false)
     private var playPosition by mutableLongStateOf(0L)
     private var playDuration by mutableLongStateOf(0L)
+    private var fullscreen by mutableStateOf(false)
+    private var playbackSpeed by mutableFloatStateOf(1f)
 
     private val mountReceiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context?, i: Intent?) { window.decorView.postDelayed({ if (stack.last().first == "usb") load() }, 2500) }
@@ -188,10 +193,16 @@ class MainActivity : ComponentActivity() {
         playlist.clear(); playlist.addAll(v)
         val i = v.indexOf(n).coerceAtLeast(0)
         player.setMediaItems(v.map { MediaItem.fromUri(it.uri!!) }, i, 0L)
-        player.prepare(); player.play(); current = i; playing = true; overlay = false; prefetch(i + 1)
+        player.prepare(); player.play(); current = i; playing = true; overlay = true; playbackSpeed = 1f; player.setPlaybackParameters(PlaybackParameters(1f)); prefetch(i + 1)
     }
     private fun up() { if (stack.size > 1) { stack.removeAt(stack.lastIndex); load() } }
-    private fun stopPlay() { player.stop(); player.clearMediaItems(); playing = false; overlay = false }
+    private fun stopPlay() { player.stop(); player.clearMediaItems(); playing = false; overlay = false; if (fullscreen) setFullscreen(false) }
+    private fun setFullscreen(enabled: Boolean) {
+        fullscreen = enabled
+        @Suppress("DEPRECATION")
+        window.decorView.systemUiVisibility = if (enabled) (android.view.View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or android.view.View.SYSTEM_UI_FLAG_FULLSCREEN or android.view.View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or android.view.View.SYSTEM_UI_FLAG_LAYOUT_STABLE or android.view.View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or android.view.View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN) else 0
+    }
+    private fun setSpeed(speed: Float) { playbackSpeed = speed; player.setPlaybackParameters(PlaybackParameters(speed)) }
     private fun play(i: Int) { if (i in playlist.indices) { player.seekTo(i, 0); player.play(); current = i; playing = true } }
     private fun seekBy(ms: Long) { val d = player.duration.takeIf { it > 0 } ?: return; player.seekTo((player.currentPosition + ms).coerceIn(0L, d)) }
 
@@ -267,54 +278,89 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun PlayerScreen() {
         var tick by remember { mutableIntStateOf(0) }
+        var isSeeking by remember { mutableStateOf(false) }
+        var speedMenu by remember { mutableStateOf(false) }
         LaunchedEffect(playing) {
             while (playing) {
-                playPosition = player.currentPosition.coerceAtLeast(0L)
+                if (!isSeeking) playPosition = player.currentPosition.coerceAtLeast(0L)
                 playDuration = player.duration.takeIf { it > 0 } ?: 0L
-                delay(500)
+                delay(300)
             }
         }
-        LaunchedEffect(overlay, tick) { if (overlay) { delay(12000); overlay = false } }
-        Box(Modifier.fillMaxSize().background(Color.Black)) {
+        LaunchedEffect(overlay, tick) {
+            if (overlay) { delay(5000); overlay = false }
+        }
+        BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black)) {
+            val compact = maxWidth < 600.dp
+            val side = if (compact) 14.dp else 44.dp
             AndroidView(factory = { PlayerView(it).apply { useController = false; this.player = this@MainActivity.player; isFocusable = false } }, modifier = Modifier.fillMaxSize())
-            AnimatedVisibility(overlay, enter = fadeIn() + slideInVertically { it / 3 }, exit = fadeOut() + slideOutVertically { it / 3 }, modifier = Modifier.align(Alignment.BottomCenter)) {
-                Column(Modifier.fillMaxWidth().background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xEE0A0C14)))).padding(top = 80.dp, bottom = 36.dp)) {
-                    Row(Modifier.padding(horizontal = 56.dp), verticalAlignment = Alignment.CenterVertically) {
+            // A tap anywhere on the video brings the YouTube-style controls back.
+            Box(Modifier.fillMaxSize().pointerInput(Unit) {
+                detectTapGestures(onTap = { overlay = true; tick++ })
+            })
+            AnimatedVisibility(overlay, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.BottomCenter)) {
+                Column(
+                    Modifier.fillMaxWidth()
+                        .background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xF20A0C14))))
+                        .padding(start = side, end = side, top = if (compact) 44.dp else 72.dp, bottom = if (compact) 16.dp else 28.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
-                            Text("Şimdi oynatılıyor", color = Color(0xFF9AA3C0), fontSize = 14.sp)
-                            Text(playlist.getOrNull(current)?.name ?: "", color = Color.White, fontSize = 30.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text("ŞİMDİ OYNATILIYOR", color = Color(0xFF9AA3C0), fontSize = if (compact) 10.sp else 13.sp)
+                            Text(playlist.getOrNull(current)?.name ?: "", color = Color.White, fontSize = if (compact) 16.sp else 24.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
-                        listOf("Tek video döngü", "Tümünü döngü", "Döngü kapalı").forEachIndexed { i, t ->
-                            Chip(t, loopMode == i) { loopMode = i; applyLoop(); tick++ }
-                            Spacer(Modifier.width(12.dp))
+                        Box {
+                            Chip("${playbackSpeed}x", false) { speedMenu = true; tick++ }
+                            DropdownMenu(expanded = speedMenu, onDismissRequest = { speedMenu = false }) {
+                                listOf(0.25f, 0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f).forEach { speed ->
+                                    DropdownMenuItem(
+                                        text = { Text(if (speed == 1f) "Normal  (1.0x)" else "${speed}x") },
+                                        onClick = { setSpeed(speed); speedMenu = false; overlay = true; tick++ }
+                                    )
+                                }
+                            }
                         }
+                        Spacer(Modifier.width(8.dp))
+                        Chip(if (fullscreen) "⤢ Küçült" else "⛶ Tam ekran", false) { setFullscreen(!fullscreen); overlay = true; tick++ }
                     }
-                    Spacer(Modifier.height(8.dp))
-                    Column(Modifier.fillMaxWidth().padding(horizontal = 56.dp)) {
-                        Slider(value = if (playDuration > 0) playPosition.coerceIn(0L, playDuration).toFloat() else 0f,
-                            onValueChange = { playPosition = it.toLong() },
-                            onValueChangeFinished = { player.seekTo(playPosition) },
-                            valueRange = 0f..playDuration.coerceAtLeast(1L).toFloat())
-                        Row(Modifier.fillMaxWidth()) {
-                            Text(formatTime(playPosition), color = Color.White, fontSize = 12.sp)
-                            Spacer(Modifier.weight(1f))
-                            Text(formatTime(playDuration), color = Color.White, fontSize = 12.sp)
-                        }
+                    Spacer(Modifier.height(if (compact) 4.dp else 8.dp))
+                    Slider(
+                        value = if (playDuration > 0) playPosition.coerceIn(0L, playDuration).toFloat() else 0f,
+                        onValueChange = { isSeeking = true; playPosition = it.toLong(); overlay = true },
+                        onValueChangeFinished = { player.seekTo(playPosition.coerceIn(0L, playDuration)); isSeeking = false; tick++ },
+                        valueRange = 0f..playDuration.coerceAtLeast(1L).toFloat(),
+                        modifier = Modifier.fillMaxWidth().height(if (compact) 28.dp else 36.dp)
+                    )
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text(formatTime(playPosition), color = Color.White, fontSize = if (compact) 10.sp else 12.sp)
+                        Spacer(Modifier.weight(1f))
+                        Text(formatTime(playDuration), color = Color.White, fontSize = if (compact) 10.sp else 12.sp)
                     }
-                    Row(Modifier.fillMaxWidth().padding(horizontal = 56.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-                        Chip("⏮ Önceki", false) { if (current > 0) play(current - 1) }
-                        Chip("↶ 10 sn", false) { seekBy(-10000) }
-                        Chip(if (player.isPlaying) "Ⅱ Duraklat" else "▶ Oynat", true) { if (player.isPlaying) player.pause() else player.play(); tick++ }
-                        Chip("10 sn ↷", false) { seekBy(10000) }
-                        Chip("Sonraki ⏭", false) { if (current < playlist.lastIndex) play(current + 1) }
-                        Chip("■ Durdur", false) { stopPlay() }
+                    Spacer(Modifier.height(if (compact) 6.dp else 10.dp))
+                    Row(
+                        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Chip("⏮", false) { if (current > 0) play(current - 1); overlay = true; tick++ }
+                        Chip("↶ 10 sn", false) { seekBy(-10000); overlay = true; tick++ }
+                        Chip(if (player.isPlaying) "Ⅱ" else "▶", true) { if (player.isPlaying) player.pause() else player.play(); overlay = true; tick++ }
+                        Chip("10 sn ↷", false) { seekBy(10000); overlay = true; tick++ }
+                        Chip("⏭", false) { if (current < playlist.lastIndex) play(current + 1); overlay = true; tick++ }
+                        Chip("■", false) { stopPlay() }
+                        Chip(if (loopMode == 0) "Tekrar: Video" else if (loopMode == 1) "Tekrar: Liste" else "Tekrar: Kapalı", false) { loopMode = (loopMode + 1) % 3; applyLoop(); overlay = true; tick++ }
                     }
+                    Spacer(Modifier.height(if (compact) 6.dp else 12.dp))
                     val st = rememberLazyListState()
                     LaunchedEffect(overlay) { if (overlay) st.scrollToItem(current) }
-                    LazyRow(state = st, contentPadding = PaddingValues(horizontal = 56.dp), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
-                        itemsIndexed(playlist) { i, d -> Card(i, d, i == current) { play(i); tick++ } }
+                    LazyRow(state = st, contentPadding = PaddingValues(horizontal = 4.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        itemsIndexed(playlist) { i, d -> Card(i, d, i == current) { play(i); overlay = true; tick++ } }
                     }
                 }
+            }
+            if (!overlay) {
+                Text("Ekrana dokun: kontroller", color = Color.White.copy(alpha = 0.65f), fontSize = 11.sp,
+                    modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 12.dp))
             }
         }
     }
