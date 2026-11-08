@@ -2,6 +2,7 @@ package com.retail.loop
 
 import android.Manifest
 import android.content.*
+import android.text.Html
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -119,14 +120,31 @@ class MainActivity : ComponentActivity() {
 
     private fun clean(n: String) = n.substringBeforeLast('.').replace('_', ' ').replace('-', ' ')
 
-    private fun parse(t: String): List<Node> {
-        val a = JSONObject(t).getJSONArray("files")
-        return (0 until a.length()).map {
-            val o = a.getJSONObject(it); val id = o.getString("id")
-            val f = o.getString("mimeType") == "application/vnd.google-apps.folder"
-            Node(id, if (f) o.getString("name") else clean(o.getString("name")), f,
-                if (f) null else Uri.parse("https://www.googleapis.com/drive/v3/files/$id?alt=media&key=${Config.API_KEY}"))
+    // Public Google Drive folders can be read from Drive's embedded folder view without an API key.
+    private fun parse(html: String): List<Node> {
+        val result = mutableListOf<Node>()
+        val itemRegex = Regex("""(?is)<a[^>]+href="([^"]+)"[^>]*>.*?class="flip-entry-title"[^>]*>(.*?)</div>""")
+        val idRegex = Regex("""/(?:file/d|drive/folders)/([A-Za-z0-9_-]+)|[?&]id=([A-Za-z0-9_-]+)""")
+        for (m in itemRegex.findAll(html)) {
+            val link = Html.fromHtml(m.groupValues[1], Html.FROM_HTML_MODE_LEGACY).toString()
+            val name = Html.fromHtml(m.groupValues[2], Html.FROM_HTML_MODE_LEGACY).toString().trim()
+            val idMatch = idRegex.find(link) ?: continue
+            val id = idMatch.groupValues.drop(1).firstOrNull { it.isNotBlank() } ?: continue
+            if (name.isBlank()) continue
+            val folder = link.contains("/folders/")
+            val uri = if (folder) null else Uri.parse("https://drive.usercontent.google.com/download?id=" + id + "&export=download&authuser=0")
+            if (result.none { it.id == id }) result += Node(id, clean(name), folder, uri)
         }
+        return result
+    }
+
+    private fun fetchPublicFolder(id: String): String {
+        val connection = URL("https://drive.google.com/embeddedfolderview?id=" + id + "#list").openConnection()
+        connection.connectTimeout = 15000
+        connection.readTimeout = 20000
+        connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/120.0.0.0 Mobile Safari/537.36")
+        connection.setRequestProperty("Accept", "text/html,application/xhtml+xml")
+        return connection.getInputStream().bufferedReader(Charsets.UTF_8).use { it.readText() }
     }
 
     private fun load() {
@@ -139,18 +157,16 @@ class MainActivity : ComponentActivity() {
             nodes.clear(); nodes.addAll(l); message = if (l.isEmpty()) "Video bulunamadı. Flash belleği takın." else ""
             return
         }
-        if (Config.API_KEY.startsWith("BURAYA")) { nodes.clear(); message = "API anahtarı girilmemiş (Config.kt)"; return }
         fun show(txt: String) {
             nodes.clear()
             if (id == Config.FOLDER_ID) nodes.add(Node("usb", "USB / Depolama", true, null))
-            nodes.addAll(parse(txt)); message = if (nodes.isEmpty()) "Bu klasör boş" else ""
+            nodes.addAll(parse(txt)); message = if (nodes.isEmpty()) "Klasör listelenemedi veya boş. Drive paylaşımını herkes görüntüleyebilir olarak kontrol edin." else ""
         }
         prefs.getString("f_$id", null)?.let { runCatching { show(it) } }
         loading = true
         Thread {
             try {
-                val q = URLEncoder.encode("'$id' in parents and (mimeType='application/vnd.google-apps.folder' or mimeType contains 'video/') and trashed=false", "UTF-8")
-                val txt = URL("https://www.googleapis.com/drive/v3/files?q=$q&fields=files(id,name,mimeType)&orderBy=folder,name&pageSize=500&key=${Config.API_KEY}").readText()
+                val txt = fetchPublicFolder(id)
                 prefs.edit().putString("f_$id", txt).apply()
                 runOnUiThread { if (stack.last().first == id) show(txt); loading = false }
             } catch (_: Exception) { runOnUiThread { loading = false; if (nodes.isEmpty()) message = "Bağlantı kurulamadı" } }
