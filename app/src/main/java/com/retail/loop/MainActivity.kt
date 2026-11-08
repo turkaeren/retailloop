@@ -242,99 +242,70 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun Browser() {
         var category by remember { mutableStateOf("Tümü") }
-        BoxWithConstraints(Modifier.fillMaxSize().background(Color(0xFF080B14))) {
+        BoxWithConstraints(Modifier.fillMaxSize().background(Color(0xFF101114))) {
             val compact = maxWidth < 760.dp
-            val horizontal = if (compact) 22.dp else 58.dp
+            val horizontal = if (compact) 18.dp else 42.dp
             val videos = nodes.filter { !it.folder && !it.pdf }
             val folders = nodes.filter { it.folder }
             val pdfs = nodes.filter { it.pdf }
-            val featured = videos.firstOrNull()
             val visible = when (category) {
                 "Videolar" -> videos
                 "Klasörler" -> folders
                 "PDF'ler" -> pdfs
                 else -> nodes
             }
-            Column(Modifier.fillMaxSize().padding(horizontal = horizontal, vertical = if (compact) 16.dp else 30.dp)) {
+            Column(Modifier.fillMaxSize().padding(horizontal = horizontal, vertical = if (compact) 14.dp else 26.dp)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(if (compact) 38.dp else 48.dp).clip(RoundedCornerShape(14.dp))
-                        .background(Brush.linearGradient(listOf(Color(0xFFE31D3B), Color(0xFF8D1028)))),
-                        contentAlignment = Alignment.Center) {
-                        Text("T", color = Color.White, fontSize = if (compact) 23.sp else 29.sp, fontWeight = FontWeight.Black)
-                    }
-                    Spacer(Modifier.width(12.dp))
+                    Text("▶", color = Color(0xFFE5394F), fontSize = 25.sp, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.width(10.dp))
                     Column(Modifier.weight(1f)) {
-                        Text("TCL AKADEMİ", color = Color.White, fontSize = if (compact) 17.sp else 21.sp, fontWeight = FontWeight.Black, letterSpacing = 1.5.sp)
-                        Text("PREMIUM LEARNING EXPERIENCE", color = Color(0xFF8993AD), fontSize = if (compact) 8.sp else 10.sp, letterSpacing = 2.sp)
+                        Text("TCL Akademi", color = Color.White, fontSize = if (compact) 20.sp else 25.sp, fontWeight = FontWeight.Bold)
+                        Text("MEDYA KÜTÜPHANESİ", color = Color(0xFF92959D), fontSize = 9.sp, letterSpacing = 2.sp)
                     }
-                    Box(Modifier.clip(RoundedCornerShape(50)).background(Color(0xFF171D2D)).padding(horizontal = 14.dp, vertical = 9.dp)) {
-                        Text(if (loading) "İÇERİKLER YÜKLENİYOR" else "EĞİTİM MERKEZİ", color = Color(0xFFB9C6E8), fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-                    }
+                    Text(if (loading) "Yükleniyor…" else videos.size.toString() + " video", color = Color(0xFFB8BBC3), fontSize = 12.sp)
                 }
-                Spacer(Modifier.height(if (compact) 14.dp else 24.dp))
                 if (stack.size > 1) {
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 12.dp)) {
+                    Spacer(Modifier.height(18.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
                         Chip("‹ Geri", false) { up() }
                         Spacer(Modifier.width(12.dp))
-                        Text(stack.joinToString("   /   ") { it.second }, color = Color(0xFF9BA7C4), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(stack.joinToString("  /  ") { it.second }, color = Color(0xFF9A9DA5), fontSize = 12.sp,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
-                if (featured != null && category == "Tümü") {
-                    Box(Modifier.fillMaxWidth().height(if (compact) 174.dp else 232.dp).clip(RoundedCornerShape(24.dp))
-                        .background(Brush.linearGradient(listOf(Color(0xFF202D52), Color(0xFF17213B), Color(0xFF3A182D))))) {
-                        Box(Modifier.fillMaxHeight().fillMaxWidth(0.52f).align(Alignment.CenterEnd)
-                            .background(Brush.horizontalGradient(listOf(Color.Transparent, Color(0x553C6BFF), Color(0x88E31D3B)))))
-                        Text("TCL", color = Color(0x12FFFFFF), fontSize = if (compact) 104.sp else 170.sp, fontWeight = FontWeight.Black,
-                            modifier = Modifier.align(Alignment.CenterEnd).padding(end = if (compact) 18.dp else 48.dp))
-                        Column(Modifier.align(Alignment.CenterStart).padding(horizontal = if (compact) 22.dp else 38.dp).fillMaxWidth(0.72f)) {
-                            Text("ÖNE ÇIKAN EĞİTİM", color = Color(0xFFFF687E), fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
-                            Spacer(Modifier.height(7.dp))
-                            Text("Teknolojiyi keşfet.\nFark yarat.", color = Color.White, fontSize = if (compact) 24.sp else 34.sp, lineHeight = if (compact) 27.sp else 39.sp, fontWeight = FontWeight.ExtraBold)
-                            Spacer(Modifier.height(5.dp))
-                            Text(featured.name, color = Color(0xFFCCD5EB), fontSize = if (compact) 11.sp else 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Spacer(Modifier.height(if (compact) 8.dp else 13.dp))
-                            Chip("▶  Eğitime başla", true) { open(featured) }
-                        }
-                        Box(Modifier.align(Alignment.TopEnd).padding(14.dp).clip(RoundedCornerShape(50))
-                            .background(Color(0x44FFFFFF)).padding(horizontal = 12.dp, vertical = 7.dp)) {
-                            Text("TCL EXPERIENCE", color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-                        }
-                    }
-                    Spacer(Modifier.height(if (compact) 14.dp else 22.dp))
-                } else {
-                    Text(stack.last().second.uppercase(), color = Color.White, fontSize = if (compact) 22.sp else 30.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 1.sp)
-                    Text(if (loading) "İçerikler hazırlanıyor..." else message.ifBlank { "Eğitim içeriklerinize göz atın." }, color = Color(0xFF8E9AB5), fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp, bottom = 14.dp))
-                }
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                    Column(Modifier.weight(1f)) {
-                        Text(if (category == "Tümü") "Keşfet" else category, color = Color.White, fontSize = if (compact) 17.sp else 21.sp, fontWeight = FontWeight.Bold)
-                        Text("${videos.size} video  ·  ${folders.size} klasör  ·  ${pdfs.size} PDF", color = Color(0xFF78849F), fontSize = 10.sp)
-                    }
-                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                        listOf("Tümü", "Videolar", "Klasörler", "PDF'ler").forEach { item ->
-                            Box(Modifier.clip(RoundedCornerShape(50))
-                                .background(if (category == item) Color(0xFFE31D3B) else Color(0xFF171E2F))
-                                .clickable { category = item }.padding(horizontal = if (compact) 11.dp else 15.dp, vertical = 8.dp)) {
-                                Text(item, color = Color.White, fontSize = if (compact) 10.sp else 12.sp, fontWeight = FontWeight.SemiBold)
-                            }
+                Spacer(Modifier.height(if (compact) 18.dp else 26.dp))
+                Text(if (stack.size == 1) "Kütüphane" else stack.last().second,
+                    color = Color.White, fontSize = if (compact) 25.sp else 31.sp, fontWeight = FontWeight.Bold)
+                Text("İzlemek istediğin içeriği seç.", color = Color(0xFF92959D), fontSize = 13.sp,
+                    modifier = Modifier.padding(top = 4.dp, bottom = 16.dp))
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf("Tümü", "Videolar", "Klasörler", "PDF'ler").forEach { item ->
+                        Box(Modifier.clip(RoundedCornerShape(8.dp))
+                            .background(if (category == item) Color(0xFFE5394F) else Color(0xFF24262B))
+                            .clickable { category = item }
+                            .padding(horizontal = 16.dp, vertical = 10.dp)) {
+                            Text(item, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                         }
                     }
                 }
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(16.dp))
                 if (visible.isEmpty()) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(if (loading) "İçerikler getiriliyor..." else "Burada henüz içerik yok", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                            Text(if (message.isNotBlank()) message else "Başka bir kategori seçebilir veya klasöre geri dönebilirsiniz.", color = Color(0xFF8E9AB5), fontSize = 12.sp, textAlign = TextAlign.Center)
+                            Text(if (loading) "İçerikler yükleniyor…" else "İçerik bulunamadı",
+                                color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+                            if (message.isNotBlank()) Text(message, color = Color(0xFF92959D), fontSize = 12.sp,
+                                textAlign = TextAlign.Center, modifier = Modifier.padding(top = 8.dp))
                         }
                     }
                 } else {
                     LazyVerticalGrid(
-                        columns = GridCells.Adaptive(if (compact) 150.dp else 218.dp),
+                        columns = GridCells.Adaptive(if (compact) 320.dp else 390.dp),
                         modifier = Modifier.fillMaxSize(),
-                        horizontalArrangement = Arrangement.spacedBy(if (compact) 12.dp else 18.dp),
-                        verticalArrangement = Arrangement.spacedBy(if (compact) 12.dp else 18.dp),
-                        contentPadding = PaddingValues(bottom = 18.dp)
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                        contentPadding = PaddingValues(bottom = 20.dp)
                     ) {
                         items(visible) { n -> Tile(n, compact) { open(n) } }
                     }
@@ -346,34 +317,31 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun Tile(n: Node, compact: Boolean, click: () -> Unit) {
         var focused by remember { mutableStateOf(false) }
-        val shape = RoundedCornerShape(18.dp)
-        Column(
+        val shape = RoundedCornerShape(10.dp)
+        Row(
             Modifier.fillMaxWidth().onFocusChanged { focused = it.isFocused }
-                .scale(if (focused) 1.035f else 1f).clip(shape)
-                .background(if (focused) Color(0xFF263451) else Color(0xFF141C2C))
-                .border(if (focused) 2.dp else 1.dp, if (focused) Color(0xFF9CB7FF) else Color(0xFF28334A), shape)
-                .clickable { click() }.padding(if (compact) 10.dp else 14.dp)
+                .background(if (focused) Color(0xFF303239) else Color(0xFF1C1E23), shape)
+                .border(if (focused) 2.dp else 1.dp, if (focused) Color.White else Color(0xFF303239), shape)
+                .clip(shape).clickable { click() }.padding(10.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Box(Modifier.fillMaxWidth().height(if (compact) 82.dp else 112.dp).clip(RoundedCornerShape(13.dp))
-                .background(Brush.linearGradient(
-                    if (n.folder) listOf(Color(0xFF314D83), Color(0xFF1D2947))
-                    else if (n.pdf) listOf(Color(0xFF713348), Color(0xFF351F37))
-                    else listOf(Color(0xFF263E69), Color(0xFF25203F), Color(0xFF5B233D))
-                ))) {
-                Text(if (n.folder) "▰" else if (n.pdf) "PDF" else "▶", color = Color(0xCCFFFFFF),
-                    fontSize = if (n.pdf) 25.sp else 35.sp, fontWeight = FontWeight.Black,
-                    modifier = Modifier.align(Alignment.Center))
-                Text(if (n.folder) "KOLEKSİYON" else if (n.pdf) "DOKÜMAN" else "VİDEO EĞİTİMİ",
-                    color = Color(0xBFFFFFFF), fontSize = 8.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp,
-                    modifier = Modifier.align(Alignment.BottomStart).padding(9.dp))
-                if (focused) Box(Modifier.fillMaxSize().border(2.dp, Color(0xFFB7C9FF), RoundedCornerShape(13.dp)))
+            Box(Modifier.size(if (compact) 92.dp else 116.dp, if (compact) 58.dp else 72.dp)
+                .clip(RoundedCornerShape(6.dp))
+                .background(if (n.folder) Color(0xFF303A4A) else if (n.pdf) Color(0xFF493039) else Color(0xFF292D36)),
+                contentAlignment = Alignment.Center) {
+                Text(if (n.folder) "▰" else if (n.pdf) "PDF" else "▶",
+                    color = if (n.pdf) Color(0xFFFF9AA7) else Color.White,
+                    fontSize = if (n.pdf) 17.sp else 25.sp, fontWeight = FontWeight.Bold)
             }
-            Spacer(Modifier.height(10.dp))
-            Text(n.name, color = Color.White, fontSize = if (compact) 12.sp else 14.sp,
-                fontWeight = FontWeight.SemiBold, maxLines = 2, minLines = 2, overflow = TextOverflow.Ellipsis)
-            Spacer(Modifier.height(5.dp))
-            Text(if (n.folder) "Klasörü keşfet  →" else if (n.pdf) "Belgeyi görüntüle  →" else "Eğitimi izle  →",
-                color = Color(0xFF9AABD0), fontSize = 10.sp, fontWeight = FontWeight.Medium)
+            Spacer(Modifier.width(13.dp))
+            Column(Modifier.weight(1f)) {
+                Text(n.name, color = Color.White, fontSize = if (compact) 13.sp else 15.sp,
+                    fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Spacer(Modifier.height(5.dp))
+                Text(if (n.folder) "KLASÖR" else if (n.pdf) "PDF BELGESİ" else "VİDEO",
+                    color = Color(0xFF9B9EA7), fontSize = 9.sp, letterSpacing = 1.2.sp)
+            }
+            Text("›", color = if (focused) Color.White else Color(0xFF777B84), fontSize = 25.sp)
         }
     }
 
