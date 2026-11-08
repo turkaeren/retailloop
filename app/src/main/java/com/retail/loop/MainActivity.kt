@@ -132,7 +132,7 @@ class MainActivity : ComponentActivity() {
             val id = idMatch.groupValues.drop(1).firstOrNull { it.isNotBlank() } ?: continue
             if (name.isBlank()) continue
             val folder = link.contains("/folders/")
-            val uri = if (folder) null else Uri.parse("https://drive.usercontent.google.com/download?id=" + id + "&export=download&authuser=0")
+            val uri = if (folder) null else Uri.parse("https://drive.google.com/uc?export=download&id=" + id + "&confirm=t")
             if (result.none { it.id == id }) result += Node(id, clean(name), folder, uri)
         }
         return result
