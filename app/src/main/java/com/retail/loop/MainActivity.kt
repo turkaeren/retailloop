@@ -84,6 +84,8 @@ class MainActivity : ComponentActivity() {
     private var current by mutableIntStateOf(0)
     private var loopMode by mutableIntStateOf(1)
     private var overlay by mutableStateOf(false)
+    private var playPosition by mutableLongStateOf(0L)
+    private var playDuration by mutableLongStateOf(0L)
 
     private val mountReceiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context?, i: Intent?) { window.decorView.postDelayed({ if (stack.last().first == "usb") load() }, 2500) }
@@ -265,6 +267,13 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun PlayerScreen() {
         var tick by remember { mutableIntStateOf(0) }
+        LaunchedEffect(playing) {
+            while (playing) {
+                playPosition = player.currentPosition.coerceAtLeast(0L)
+                playDuration = player.duration.takeIf { it > 0 } ?: 0L
+                delay(500)
+            }
+        }
         LaunchedEffect(overlay, tick) { if (overlay) { delay(12000); overlay = false } }
         Box(Modifier.fillMaxSize().background(Color.Black)) {
             AndroidView(factory = { PlayerView(it).apply { useController = false; this.player = this@MainActivity.player; isFocusable = false } }, modifier = Modifier.fillMaxSize())
@@ -280,7 +289,18 @@ class MainActivity : ComponentActivity() {
                             Spacer(Modifier.width(12.dp))
                         }
                     }
-                    Spacer(Modifier.height(12.dp))
+                    Spacer(Modifier.height(8.dp))
+                    Column(Modifier.fillMaxWidth().padding(horizontal = 56.dp)) {
+                        Slider(value = if (playDuration > 0) playPosition.coerceIn(0L, playDuration).toFloat() else 0f,
+                            onValueChange = { playPosition = it.toLong() },
+                            onValueChangeFinished = { player.seekTo(playPosition) },
+                            valueRange = 0f..playDuration.coerceAtLeast(1L).toFloat())
+                        Row(Modifier.fillMaxWidth()) {
+                            Text(formatTime(playPosition), color = Color.White, fontSize = 12.sp)
+                            Spacer(Modifier.weight(1f))
+                            Text(formatTime(playDuration), color = Color.White, fontSize = 12.sp)
+                        }
+                    }
                     Row(Modifier.fillMaxWidth().padding(horizontal = 56.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
                         Chip("⏮ Önceki", false) { if (current > 0) play(current - 1) }
                         Chip("↶ 10 sn", false) { seekBy(-10000) }
@@ -297,6 +317,11 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    private fun formatTime(ms: Long): String {
+        val s = (ms.coerceAtLeast(0L) / 1000L).toInt()
+        return if (s >= 3600) "%d:%02d:%02d".format(s / 3600, (s % 3600) / 60, s % 60) else "%02d:%02d".format(s / 60, s % 60)
     }
 
     @Composable
