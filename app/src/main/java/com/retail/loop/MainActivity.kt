@@ -66,7 +66,7 @@ import java.io.File
 import java.net.URL
 import java.net.URLEncoder
 
-data class Node(val id: String, val name: String, val folder: Boolean, val uri: Uri?)
+data class Node(val id: String, val name: String, val folder: Boolean, val uri: Uri?, val pdf: Boolean = false)
 
 @UnstableApi
 class MainActivity : ComponentActivity() {
@@ -106,6 +106,7 @@ class MainActivity : ComponentActivity() {
             .setPreferredAudioMimeTypes(MimeTypes.AUDIO_E_AC3_JOC, MimeTypes.AUDIO_E_AC3, MimeTypes.AUDIO_AC3).build()
         player.addListener(object : Player.Listener {
             override fun onMediaItemTransition(m: MediaItem?, r: Int) { current = player.currentMediaItemIndex; prefetch(current + 1) }
+            override fun onIsPlayingChanged(isPlaying: Boolean) { playing = isPlaying }
         })
         applyLoop()
         registerReceiver(mountReceiver, IntentFilter().apply {
@@ -132,8 +133,9 @@ class MainActivity : ComponentActivity() {
             val id = idMatch.groupValues.drop(1).firstOrNull { it.isNotBlank() } ?: continue
             if (name.isBlank()) continue
             val folder = link.contains("/folders/")
+            val isPdf = name.lowercase().endsWith(".pdf")
             val uri = if (folder) null else Uri.parse("https://drive.google.com/uc?export=download&id=" + id + "&confirm=t")
-            if (result.none { it.id == id }) result += Node(id, clean(name), folder, uri)
+            if (result.none { it.id == id }) result += Node(id, clean(name), folder, uri, isPdf)
         }
         return result
     }
@@ -175,7 +177,12 @@ class MainActivity : ComponentActivity() {
 
     private fun open(n: Node) {
         if (n.folder) { stack.add(Pair(n.id, n.name)); load(); return }
-        val v = nodes.filter { !it.folder }
+        if (n.pdf) {
+            try { startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(n.uri, "application/pdf").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+            catch (_: Exception) { message = "PDF açmak için cihazda PDF görüntüleyici bulunamadı." }
+            return
+        }
+        val v = nodes.filter { !it.folder && !it.pdf }
         playlist.clear(); playlist.addAll(v)
         val i = v.indexOf(n).coerceAtLeast(0)
         player.setMediaItems(v.map { MediaItem.fromUri(it.uri!!) }, i, 0L)
@@ -183,7 +190,8 @@ class MainActivity : ComponentActivity() {
     }
     private fun up() { if (stack.size > 1) { stack.removeAt(stack.lastIndex); load() } }
     private fun stopPlay() { player.stop(); player.clearMediaItems(); playing = false; overlay = false }
-    private fun play(i: Int) { if (i in playlist.indices) { player.seekTo(i, 0); player.play(); current = i } }
+    private fun play(i: Int) { if (i in playlist.indices) { player.seekTo(i, 0); player.play(); current = i; playing = true } }
+    private fun seekBy(ms: Long) { val d = player.duration.takeIf { it > 0 } ?: return; player.seekTo((player.currentPosition + ms).coerceIn(0L, d)) }
 
     private fun prefetch(i: Int) {
         if (playlist.isEmpty()) return
@@ -238,6 +246,7 @@ class MainActivity : ComponentActivity() {
             .border(if (f) 3.dp else 0.dp, Color.White, sh).clickable { click() }.padding(14.dp),
             horizontalAlignment = Alignment.CenterHorizontally) {
             Canvas(Modifier.size(96.dp, 80.dp)) { if (n.folder) folderIcon() else videoIcon() }
+            if (n.pdf) Text("PDF", color = Color(0xFFFF9B9B), fontSize = 12.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(10.dp))
             Text(n.name, color = Color.White, fontSize = 14.sp, maxLines = 2, minLines = 2, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
         }
@@ -256,7 +265,7 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun PlayerScreen() {
         var tick by remember { mutableIntStateOf(0) }
-        LaunchedEffect(overlay, tick) { if (overlay) { delay(7000); overlay = false } }
+        LaunchedEffect(overlay, tick) { if (overlay) { delay(12000); overlay = false } }
         Box(Modifier.fillMaxSize().background(Color.Black)) {
             AndroidView(factory = { PlayerView(it).apply { useController = false; this.player = this@MainActivity.player; isFocusable = false } }, modifier = Modifier.fillMaxSize())
             AnimatedVisibility(overlay, enter = fadeIn() + slideInVertically { it / 3 }, exit = fadeOut() + slideOutVertically { it / 3 }, modifier = Modifier.align(Alignment.BottomCenter)) {
@@ -271,7 +280,15 @@ class MainActivity : ComponentActivity() {
                             Spacer(Modifier.width(12.dp))
                         }
                     }
-                    Spacer(Modifier.height(20.dp))
+                    Spacer(Modifier.height(12.dp))
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 56.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                        Chip("⏮ Önceki", false) { if (current > 0) play(current - 1) }
+                        Chip("↶ 10 sn", false) { seekBy(-10000) }
+                        Chip(if (player.isPlaying) "Ⅱ Duraklat" else "▶ Oynat", true) { if (player.isPlaying) player.pause() else player.play(); tick++ }
+                        Chip("10 sn ↷", false) { seekBy(10000) }
+                        Chip("Sonraki ⏭", false) { if (current < playlist.lastIndex) play(current + 1) }
+                        Chip("■ Durdur", false) { stopPlay() }
+                    }
                     val st = rememberLazyListState()
                     LaunchedEffect(overlay) { if (overlay) st.scrollToItem(current) }
                     LazyRow(state = st, contentPadding = PaddingValues(horizontal = 56.dp), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
