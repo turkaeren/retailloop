@@ -116,7 +116,8 @@ class MainActivity : ComponentActivity() {
             override fun onMediaItemTransition(m: MediaItem?, r: Int) { current = player.currentMediaItemIndex; prefetch(current + 1) }
             override fun onIsPlayingChanged(isPlaying: Boolean) { playing = isPlaying; if (isPlaying) playerError = "" }
             override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
-                playerError = "Video açılamadı: ${error.errorCodeName}. ${error.cause?.message ?: error.message ?: \"Bilinmeyen oynatma hatası\"}"
+                val reason = error.cause?.message ?: error.message ?: "Bilinmeyen oynatma hatası"
+                playerError = "Video açılamadı: ${error.errorCodeName}. $reason"
                 playing = false
             }
         })
