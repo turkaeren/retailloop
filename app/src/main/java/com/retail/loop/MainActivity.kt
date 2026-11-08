@@ -243,7 +243,7 @@ class MainActivity : ComponentActivity() {
     private fun Browser() {
         var category by remember { mutableStateOf("Tümü") }
         BoxWithConstraints(Modifier.fillMaxSize().background(Color(0xFF080B14))) {
-            val compact = compact
+            val compact = maxWidth < 760.dp
             val horizontal = if (compact) 22.dp else 58.dp
             val videos = nodes.filter { !it.folder && !it.pdf }
             val folders = nodes.filter { it.folder }
