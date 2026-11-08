@@ -196,8 +196,8 @@ class MainActivity : ComponentActivity() {
         player.prepare(); player.play(); current = i; playing = true; overlay = true; playbackSpeed = 1f; player.setPlaybackParameters(PlaybackParameters(1f)); prefetch(i + 1)
     }
     private fun up() { if (stack.size > 1) { stack.removeAt(stack.lastIndex); load() } }
-    private fun stopPlay() { player.stop(); player.clearMediaItems(); playing = false; overlay = false; if (fullscreen) setFullscreen(false) }
-    private fun setFullscreen(enabled: Boolean) {
+    private fun stopPlay() { player.stop(); player.clearMediaItems(); playing = false; overlay = false; if (fullscreen) applyFullscreen(false) }
+    private fun applyFullscreen(enabled: Boolean) {
         fullscreen = enabled
         @Suppress("DEPRECATION")
         window.decorView.systemUiVisibility = if (enabled) (android.view.View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or android.view.View.SYSTEM_UI_FLAG_FULLSCREEN or android.view.View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or android.view.View.SYSTEM_UI_FLAG_LAYOUT_STABLE or android.view.View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or android.view.View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN) else 0
@@ -321,7 +321,7 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                         Spacer(Modifier.width(8.dp))
-                        Chip(if (fullscreen) "⤢ Küçült" else "⛶ Tam ekran", false) { setFullscreen(!fullscreen); overlay = true; tick++ }
+                        Chip(if (fullscreen) "⤢ Küçült" else "⛶ Tam ekran", false) { applyFullscreen(!fullscreen); overlay = true; tick++ }
                     }
                     Spacer(Modifier.height(if (compact) 4.dp else 8.dp))
                     Slider(
