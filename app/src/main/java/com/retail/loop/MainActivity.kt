@@ -336,7 +336,7 @@ class MainActivity : ComponentActivity() {
                         verticalArrangement = Arrangement.spacedBy(if (compact) 12.dp else 18.dp),
                         contentPadding = PaddingValues(bottom = 18.dp)
                     ) {
-                        items(visible) { n -> Tile(n) { open(n) } }
+                        items(visible) { n -> Tile(n, compact) { open(n) } }
                     }
                 }
             }
@@ -344,7 +344,7 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun Tile(n: Node, click: () -> Unit) {
+    private fun Tile(n: Node, compact: Boolean, click: () -> Unit) {
         var focused by remember { mutableStateOf(false) }
         val shape = RoundedCornerShape(18.dp)
         Column(
@@ -352,7 +352,7 @@ class MainActivity : ComponentActivity() {
                 .scale(if (focused) 1.035f else 1f).clip(shape)
                 .background(if (focused) Color(0xFF263451) else Color(0xFF141C2C))
                 .border(if (focused) 2.dp else 1.dp, if (focused) Color(0xFF9CB7FF) else Color(0xFF28334A), shape)
-                .clickable { click() }.padding(if (maxWidth < 760.dp) 10.dp else 14.dp)
+                .clickable { click() }.padding(if (compact) 10.dp else 14.dp)
         ) {
             Box(Modifier.fillMaxWidth().height(if (maxWidth < 760.dp) 82.dp else 112.dp).clip(RoundedCornerShape(13.dp))
                 .background(Brush.linearGradient(
