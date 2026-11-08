@@ -84,6 +84,7 @@ class MainActivity : ComponentActivity() {
     private var loading by mutableStateOf(false)
     private var message by mutableStateOf("")
     private var playing by mutableStateOf(false)
+    private var playerOpen by mutableStateOf(false)
     private var current by mutableIntStateOf(0)
     private var loopMode by mutableIntStateOf(1)
     private var overlay by mutableStateOf(false)
@@ -200,10 +201,12 @@ class MainActivity : ComponentActivity() {
         playlist.clear(); playlist.addAll(v)
         val i = v.indexOf(n).coerceAtLeast(0)
         player.setMediaItems(v.map { MediaItem.fromUri(it.uri!!) }, i, 0L)
-        player.prepare(); player.play(); current = i; playing = true; overlay = true; playbackSpeed = 1f; player.setPlaybackParameters(PlaybackParameters(1f)); prefetch(i + 1)
+        playerOpen = true
+        overlay = true
+        player.prepare(); player.play(); current = i; playing = true; playbackSpeed = 1f; player.setPlaybackParameters(PlaybackParameters(1f)); prefetch(i + 1)
     }
     private fun up() { if (stack.size > 1) { stack.removeAt(stack.lastIndex); load() } }
-    private fun stopPlay() { player.stop(); player.clearMediaItems(); playing = false; overlay = false; if (fullscreen) applyFullscreen(false) }
+    private fun stopPlay() { player.stop(); player.clearMediaItems(); playing = false; playerOpen = false; overlay = false; playerError = ""; if (fullscreen) applyFullscreen(false) }
     private fun applyFullscreen(enabled: Boolean) {
         fullscreen = enabled
         @Suppress("DEPRECATION")
@@ -225,8 +228,18 @@ class MainActivity : ComponentActivity() {
         prefs.edit().putInt("loop", loopMode).apply()
     }
 
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0 && playerOpen) {
+            when (event.keyCode) {
+                KeyEvent.KEYCODE_DPAD_UP -> if (overlay) { overlay = false; return true }
+                KeyEvent.KEYCODE_DPAD_DOWN -> if (!overlay) { overlay = true; return true }
+            }
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
     override fun onKeyDown(k: Int, e: KeyEvent): Boolean {
-        if (!playing || overlay) return super.onKeyDown(k, e)
+        if (!playerOpen || !playing || overlay) return super.onKeyDown(k, e)
         val n = playlist.size.coerceAtLeast(1)
         when (k) {
             KeyEvent.KEYCODE_DPAD_RIGHT -> { play((current + 1) % n); return true }
@@ -238,11 +251,11 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun Ui() {
-        BackHandler(playing && overlay) { overlay = false }
-        BackHandler(playing && !overlay) { stopPlay() }
-        BackHandler(!playing && stack.size > 1) { up() }
+        BackHandler(playerOpen && overlay) { overlay = false }
+        BackHandler(playerOpen && !overlay) { stopPlay() }
+        BackHandler(!playerOpen && stack.size > 1) { up() }
         MaterialTheme(colorScheme = darkColorScheme(primary = Color(0xFF7C9CFF))) {
-            Box(Modifier.fillMaxSize().background(Color(0xFF0A0C14))) { if (playing) PlayerScreen() else Browser() }
+            Box(Modifier.fillMaxSize().background(Color(0xFF0A0C14))) { if (playerOpen) PlayerScreen() else Browser() }
         }
     }
 
