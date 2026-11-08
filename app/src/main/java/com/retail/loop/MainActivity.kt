@@ -91,6 +91,7 @@ class MainActivity : ComponentActivity() {
     private var playDuration by mutableLongStateOf(0L)
     private var fullscreen by mutableStateOf(false)
     private var playbackSpeed by mutableFloatStateOf(1f)
+    private var playerError by mutableStateOf("")
 
     private val mountReceiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context?, i: Intent?) { window.decorView.postDelayed({ if (stack.last().first == "usb") load() }, 2500) }
@@ -103,7 +104,7 @@ class MainActivity : ComponentActivity() {
         loopMode = prefs.getInt("loop", 1)
         cache = SimpleCache(File(filesDir, "vid"), LeastRecentlyUsedCacheEvictor(Config.CACHE_GB * 1024L * 1024L * 1024L), StandaloneDatabaseProvider(this))
         dsFactory = CacheDataSource.Factory().setCache(cache)
-            .setUpstreamDataSourceFactory(DefaultDataSource.Factory(this, DefaultHttpDataSource.Factory().setConnectTimeoutMs(15000).setReadTimeoutMs(20000)))
+            .setUpstreamDataSourceFactory(DefaultDataSource.Factory(this, DefaultHttpDataSource.Factory().setUserAgent("Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/120.0.0.0 Mobile Safari/537.36").setAllowCrossProtocolRedirects(true).setConnectTimeoutMs(30000).setReadTimeoutMs(30000)))
             .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
         val lc = DefaultLoadControl.Builder().setBufferDurationsMs(20000, 60000, 2000, 4000)
             .setTargetBufferBytes(200 * 1024 * 1024).setPrioritizeTimeOverSizeThresholds(false).build()
@@ -113,7 +114,11 @@ class MainActivity : ComponentActivity() {
             .setPreferredAudioMimeTypes(MimeTypes.AUDIO_E_AC3_JOC, MimeTypes.AUDIO_E_AC3, MimeTypes.AUDIO_AC3).build()
         player.addListener(object : Player.Listener {
             override fun onMediaItemTransition(m: MediaItem?, r: Int) { current = player.currentMediaItemIndex; prefetch(current + 1) }
-            override fun onIsPlayingChanged(isPlaying: Boolean) { playing = isPlaying }
+            override fun onIsPlayingChanged(isPlaying: Boolean) { playing = isPlaying; if (isPlaying) playerError = "" }
+            override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                playerError = "Video açılamadı: ${error.errorCodeName}. ${error.cause?.message ?: error.message ?: \"Bilinmeyen oynatma hatası\"}"
+                playing = false
+            }
         })
         applyLoop()
         registerReceiver(mountReceiver, IntentFilter().apply {
@@ -141,7 +146,7 @@ class MainActivity : ComponentActivity() {
             if (name.isBlank()) continue
             val folder = link.contains("/folders/")
             val isPdf = name.lowercase().endsWith(".pdf")
-            val uri = if (folder) null else Uri.parse("https://drive.google.com/uc?export=download&id=" + id + "&confirm=t")
+            val uri = if (folder) null else Uri.parse("https://drive.usercontent.google.com/download?id=" + id + "&export=download&confirm=t")
             if (result.none { it.id == id }) result += Node(id, clean(name), folder, uri, isPdf)
         }
         return result
@@ -183,6 +188,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun open(n: Node) {
+        playerError = ""
         if (n.folder) { stack.add(Pair(n.id, n.name)); load(); return }
         if (n.pdf) {
             try { startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(n.uri, "application/pdf").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
@@ -374,6 +380,13 @@ class MainActivity : ComponentActivity() {
             val compact = maxWidth < 600.dp
             val side = if (compact) 14.dp else 44.dp
             AndroidView(factory = { PlayerView(it).apply { useController = false; this.player = this@MainActivity.player; isFocusable = false } }, modifier = Modifier.fillMaxSize())
+            if (playerError.isNotBlank()) {
+                Column(Modifier.align(Alignment.Center).padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("Bu video oynatılamadı", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                    Text(playerError, color = Color(0xFFFFAAB2), fontSize = 12.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 10.dp))
+                    Text("Geri dönüp başka bir video deneyebilirsin.", color = Color.LightGray, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
+                }
+            }
             // A tap anywhere on the video brings the YouTube-style controls back.
             Box(Modifier.fillMaxSize().pointerInput(Unit) {
                 detectTapGestures(onTap = { overlay = true; tick++ })
