@@ -273,7 +273,7 @@ class MainActivity : ComponentActivity() {
                 if (stack.size > 1) {
                     Spacer(Modifier.height(18.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Chip("‹ Geri", false) { up() }
+                        PlayerChip("‹ Geri", false) { up() }
                         Spacer(Modifier.width(12.dp))
                         Text(stack.joinToString("  /  ") { it.second }, color = Color(0xFF9A9DA5), fontSize = 12.sp,
                             maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -403,7 +403,7 @@ class MainActivity : ComponentActivity() {
                             Text(playlist.getOrNull(current)?.name ?: "", color = Color.White, fontSize = if (compact) 16.sp else 24.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                         Box {
-                            Chip("${playbackSpeed}x", false) { speedMenu = true; tick++ }
+                            PlayerChip("${playbackSpeed}x", false) { speedMenu = true; tick++ }
                             DropdownMenu(expanded = speedMenu, onDismissRequest = { speedMenu = false }) {
                                 listOf(0.25f, 0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f).forEach { speed ->
                                     DropdownMenuItem(
@@ -414,7 +414,7 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                         Spacer(Modifier.width(8.dp))
-                        Chip(if (fullscreen) "⤢ Küçült" else "⛶ Tam ekran", false) { applyFullscreen(!fullscreen); overlay = true; tick++ }
+                        PlayerChip(if (fullscreen) "⤢ Küçült" else "⛶ Tam ekran", false) { applyFullscreen(!fullscreen); overlay = true; tick++ }
                     }
                     Spacer(Modifier.height(if (compact) 4.dp else 8.dp))
                     Slider(
@@ -435,19 +435,19 @@ class MainActivity : ComponentActivity() {
                         horizontalArrangement = Arrangement.Center,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Chip("⏮", false) { if (current > 0) play(current - 1); overlay = true; tick++ }
-                        Chip("↶ 10 sn", false) { seekBy(-10000); overlay = true; tick++ }
-                        Chip(if (player.isPlaying) "Ⅱ" else "▶", true) { if (player.isPlaying) player.pause() else player.play(); overlay = true; tick++ }
-                        Chip("10 sn ↷", false) { seekBy(10000); overlay = true; tick++ }
-                        Chip("⏭", false) { if (current < playlist.lastIndex) play(current + 1); overlay = true; tick++ }
-                        Chip("■", false) { stopPlay() }
-                        Chip(if (loopMode == 0) "Tekrar: Video" else if (loopMode == 1) "Tekrar: Liste" else "Tekrar: Kapalı", false) { loopMode = (loopMode + 1) % 3; applyLoop(); overlay = true; tick++ }
+                        PlayerChip("⏮", false) { if (current > 0) play(current - 1); overlay = true; tick++ }
+                        PlayerChip("↶ 10 sn", false) { seekBy(-10000); overlay = true; tick++ }
+                        PlayerChip(if (player.isPlaying) "Ⅱ" else "▶", true) { if (player.isPlaying) player.pause() else player.play(); overlay = true; tick++ }
+                        PlayerChip("10 sn ↷", false) { seekBy(10000); overlay = true; tick++ }
+                        PlayerChip("⏭", false) { if (current < playlist.lastIndex) play(current + 1); overlay = true; tick++ }
+                        PlayerChip("■", false) { stopPlay() }
+                        PlayerChip(if (loopMode == 0) "Tekrar: Video" else if (loopMode == 1) "Tekrar: Liste" else "Tekrar: Kapalı", false) { loopMode = (loopMode + 1) % 3; applyLoop(); overlay = true; tick++ }
                     }
                     Spacer(Modifier.height(if (compact) 6.dp else 12.dp))
                     val st = rememberLazyListState()
                     LaunchedEffect(overlay) { if (overlay) st.scrollToItem(current) }
                     LazyRow(state = st, contentPadding = PaddingValues(horizontal = 4.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        itemsIndexed(playlist) { i, d -> Card(i, d, i == current) { play(i); overlay = true; tick++ } }
+                        itemsIndexed(playlist) { i, d -> PlaylistCard(i, d, i == current) { play(i); overlay = true; tick++ } }
                     }
                 }
             }
@@ -464,7 +464,7 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun Chip(t: String, on: Boolean, click: () -> Unit) {
+    private fun PlayerChip(t: String, on: Boolean, click: () -> Unit) {
         var f by remember { mutableStateOf(false) }
         Box(Modifier.onFocusChanged { f = it.isFocused }.scale(if (f) 1.08f else 1f)
             .clip(RoundedCornerShape(50)).background(if (on) Color(0xFF7C9CFF) else Color(0x33FFFFFF))
@@ -475,7 +475,7 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun Card(i: Int, d: Node, active: Boolean, click: () -> Unit) {
+    private fun PlaylistCard(i: Int, d: Node, active: Boolean, click: () -> Unit) {
         var f by remember { mutableStateOf(false) }
         val g = if (active) listOf(Color(0xFF4F6BFF), Color(0xFF9B5CFF)) else listOf(Color(0xFF2A2F45), Color(0xFF171A29))
         Box(Modifier.size(240.dp, 135.dp).onFocusChanged { f = it.isFocused }.scale(if (f) 1.1f else 1f)
