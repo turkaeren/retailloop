@@ -243,7 +243,7 @@ class MainActivity : ComponentActivity() {
     private fun Browser() {
         var category by remember { mutableStateOf("Tümü") }
         BoxWithConstraints(Modifier.fillMaxSize().background(Color(0xFF080B14))) {
-            val compact = maxWidth < 760.dp
+            val compact = compact
             val horizontal = if (compact) 22.dp else 58.dp
             val videos = nodes.filter { !it.folder && !it.pdf }
             val folders = nodes.filter { it.folder }
@@ -354,7 +354,7 @@ class MainActivity : ComponentActivity() {
                 .border(if (focused) 2.dp else 1.dp, if (focused) Color(0xFF9CB7FF) else Color(0xFF28334A), shape)
                 .clickable { click() }.padding(if (compact) 10.dp else 14.dp)
         ) {
-            Box(Modifier.fillMaxWidth().height(if (maxWidth < 760.dp) 82.dp else 112.dp).clip(RoundedCornerShape(13.dp))
+            Box(Modifier.fillMaxWidth().height(if (compact) 82.dp else 112.dp).clip(RoundedCornerShape(13.dp))
                 .background(Brush.linearGradient(
                     if (n.folder) listOf(Color(0xFF314D83), Color(0xFF1D2947))
                     else if (n.pdf) listOf(Color(0xFF713348), Color(0xFF351F37))
@@ -369,7 +369,7 @@ class MainActivity : ComponentActivity() {
                 if (focused) Box(Modifier.fillMaxSize().border(2.dp, Color(0xFFB7C9FF), RoundedCornerShape(13.dp)))
             }
             Spacer(Modifier.height(10.dp))
-            Text(n.name, color = Color.White, fontSize = if (maxWidth < 760.dp) 12.sp else 14.sp,
+            Text(n.name, color = Color.White, fontSize = if (compact) 12.sp else 14.sp,
                 fontWeight = FontWeight.SemiBold, maxLines = 2, minLines = 2, overflow = TextOverflow.Ellipsis)
             Spacer(Modifier.height(5.dp))
             Text(if (n.folder) "Klasörü keşfet  →" else if (n.pdf) "Belgeyi görüntüle  →" else "Eğitimi izle  →",
