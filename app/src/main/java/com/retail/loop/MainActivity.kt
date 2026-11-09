@@ -191,7 +191,6 @@ class MainActivity : ComponentActivity() {
         }
         fun show(txt: String) {
             nodes.clear()
-            if (id == Config.FOLDER_ID) nodes.add(Node("usb", "USB / Depolama", true, null))
             nodes.addAll(parse(txt)); message = if (nodes.isEmpty()) "Klasör listelenemedi veya boş. Drive paylaşımını herkes görüntüleyebilir olarak kontrol edin." else ""
         }
         prefs.getString("f_$id", null)?.let { runCatching { show(it) } }
