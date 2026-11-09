@@ -131,6 +131,7 @@ class MainActivity : ComponentActivity() {
     private var viewerLoadToken = 0
     private var kiosk by mutableStateOf(false)
     private var diagText by mutableStateOf("")
+    private var lastErr by mutableStateOf("")
     @Volatile private var driveBlockedUntil = 0L
     private var pendingPlayId: String? = null
     private val warmHandler = Handler(Looper.getMainLooper())
@@ -182,7 +183,7 @@ class MainActivity : ComponentActivity() {
             }
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 playing = isPlaying
-                if (isPlaying) { playerError = ""; playerStatus = ""; retryCount = 0; diagText = "" }
+                if (isPlaying) { playerError = ""; playerStatus = ""; retryCount = 0; diagText = ""; lastErr = "" }
             }
             override fun onPlaybackStateChanged(state: Int) {
                 if (state == Player.STATE_BUFFERING) playerStatus = "Arabelleğe alınıyor…"
@@ -198,11 +199,11 @@ class MainActivity : ComponentActivity() {
                     driveBlockedUntil = System.currentTimeMillis() + 10 * 60_000L
                     stopPrefetch()
                 }
-                if (diagText.isBlank()) playlist.getOrNull(player.currentMediaItemIndex)?.let { diagnose(it) }
-                if (retryCount < 6 && playerOpen) {
+                                if (retryCount < 6 && playerOpen) {
                     retryCount++
                     val waitMs = (1000L shl (retryCount - 1)).coerceAtMost(32000L)
                     playerStatus = "Bağlantı yenileniyor… (${retryCount}/6)"
+                    lastErr = error.errorCodeName + " · " + (error.cause?.javaClass?.simpleName ?: "") + " " + (error.cause?.message ?: error.message ?: "").take(120)
                     playerError = ""
                     overlay = true
                     retryHandler.removeCallbacksAndMessages(null)
@@ -955,8 +956,8 @@ class MainActivity : ComponentActivity() {
                 Text(playerStatus, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.align(Alignment.Center).background(Color(0x99000000), RoundedCornerShape(12.dp)).padding(horizontal = 22.dp, vertical = 14.dp))
             }
-            if (diagText.isNotBlank() && (playerStatus.isNotBlank() || playerError.isNotBlank())) {
-                Text(diagText, color = Color(0xFFFFD28A), fontSize = 12.sp, textAlign = TextAlign.Center,
+            if (lastErr.isNotBlank() && (playerStatus.isNotBlank() || playerError.isNotBlank())) {
+                Text("HATA: " + lastErr, color = Color(0xFFFFD28A), fontSize = 12.sp, textAlign = TextAlign.Center,
                     modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 36.dp, start = 24.dp, end = 24.dp)
                         .background(Color(0xAA000000), RoundedCornerShape(10.dp)).padding(horizontal = 14.dp, vertical = 8.dp))
             }
