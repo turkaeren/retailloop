@@ -538,7 +538,12 @@ class MainActivity : ComponentActivity() {
                 Column(Modifier.align(Alignment.Center).padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                     Text("Bu video oynatılamadı", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
                     Text(playerError, color = Color(0xFFFFAAB2), fontSize = 12.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 10.dp))
-                    Text("Geri dönüp başka bir video deneyebilirsin.", color = Color.LightGray, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
+                    Text("Bağlantıyı yeniden kurmayı deneyebilirsin.", color = Color.LightGray, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
+                    Spacer(Modifier.height(14.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        PlayerChip("↻ Tekrar dene", true) { retryPlayback(); overlay = true; tick++ }
+                        PlayerChip("‹ Listeye dön", false) { stopPlay() }
+                    }
                 }
             }
             // A tap anywhere on the video brings the YouTube-style controls back.
@@ -574,8 +579,9 @@ class MainActivity : ComponentActivity() {
                     Slider(
                         value = if (playDuration > 0) playPosition.coerceIn(0L, playDuration).toFloat() else 0f,
                         onValueChange = { isSeeking = true; playPosition = it.toLong(); overlay = true },
-                        onValueChangeFinished = { player.seekTo(playPosition.coerceIn(0L, playDuration)); isSeeking = false; tick++ },
+                        onValueChangeFinished = { seekToPosition(playPosition.coerceIn(0L, playDuration)); isSeeking = false; tick++ },
                         valueRange = 0f..playDuration.coerceAtLeast(1L).toFloat(),
+                        enabled = playDuration > 0L,
                         modifier = Modifier.fillMaxWidth().height(if (compact) 28.dp else 36.dp)
                     )
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
