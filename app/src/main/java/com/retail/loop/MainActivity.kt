@@ -356,7 +356,7 @@ class MainActivity : ComponentActivity() {
         val localFactory = DefaultMediaSourceFactory(DefaultDataSource.Factory(this))
         val mediaSources = v.map { node ->
             val item = mediaItemFor(node)
-            if (node.uri.scheme == "content") localFactory.createMediaSource(item) else sourceFactory.createMediaSource(item)
+            if (node.uri?.scheme == "content") localFactory.createMediaSource(item) else sourceFactory.createMediaSource(item)
         }
         player.setMediaSources(mediaSources, i, 0L)
         playbackActive = true
