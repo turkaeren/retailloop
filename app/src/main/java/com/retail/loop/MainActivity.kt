@@ -87,6 +87,7 @@ class MainActivity : ComponentActivity() {
     private var fullscreen by mutableStateOf(false)
     private var playbackSpeed by mutableFloatStateOf(1f)
     private var playerError by mutableStateOf("")
+    private var playerUiActivity by mutableIntStateOf(0)
 
     private val mountReceiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context?, i: Intent?) { window.decorView.postDelayed({ if (stack.last().first == "usb") load() }, 2500) }
@@ -281,8 +282,9 @@ class MainActivity : ComponentActivity() {
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         // Controls hidden: down/OK shows them. When visible, Compose owns D-pad focus navigation.
-        if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0 && playerOpen && !overlay) {
-            if (event.keyCode == KeyEvent.KEYCODE_DPAD_DOWN || event.keyCode == KeyEvent.KEYCODE_DPAD_CENTER || event.keyCode == KeyEvent.KEYCODE_ENTER) {
+        if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0 && playerOpen) {
+            if (overlay) playerUiActivity++
+            else if (event.keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
                 overlay = true
                 return true
             }
@@ -538,7 +540,7 @@ class MainActivity : ComponentActivity() {
                 delay(300)
             }
         }
-        LaunchedEffect(overlay, tick) {
+        LaunchedEffect(overlay, tick, playerUiActivity) {
             if (overlay) { delay(5000); overlay = false }
         }
         BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black)) {
