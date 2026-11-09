@@ -517,6 +517,7 @@ class MainActivity : ComponentActivity() {
     private fun checkUpdate(manual: Boolean = false) {
         val now = System.currentTimeMillis()
         if (updateChecking) { if (manual) toast("Kontrol zaten sürüyor…"); return }
+        if (manual) lastInstallPrompt = 0L   // elle kontrolde pencere hemen çıksın
         if (!manual && now - lastUpdateCheck < 30 * 60_000L) return
         updateApk?.let { if (it.exists()) { maybeInstall(); if (manual) toast("Güncelleme hazır, 'Yükle'ye basın"); return } }
         updateChecking = true
