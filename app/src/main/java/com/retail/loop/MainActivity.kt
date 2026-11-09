@@ -130,6 +130,8 @@ class MainActivity : ComponentActivity() {
     private var pdfDescriptor: ParcelFileDescriptor? = null
     private var viewerLoadToken = 0
     private var kiosk by mutableStateOf(false)
+    private var diagText by mutableStateOf("")
+    @Volatile private var driveBlockedUntil = 0L
     private var pendingPlayId: String? = null
     private val warmHandler = Handler(Looper.getMainLooper())
     private val warmExec = java.util.concurrent.Executors.newSingleThreadExecutor()
@@ -186,7 +188,7 @@ class MainActivity : ComponentActivity() {
             }
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 playing = isPlaying
-                if (isPlaying) { playerError = ""; playerStatus = ""; retryCount = 0 }
+                if (isPlaying) { playerError = ""; playerStatus = ""; retryCount = 0; diagText = "" }
             }
             override fun onPlaybackStateChanged(state: Int) {
                 if (state == Player.STATE_BUFFERING) playerStatus = "Arabelleğe alınıyor…"
@@ -197,6 +199,12 @@ class MainActivity : ComponentActivity() {
                     playlist.getOrNull(player.currentMediaItemIndex)?.uri?.let { u -> runCatching { simpleCache.removeResource(cacheKey(u)) } }
                 }
                 retryPosition = player.currentPosition.coerceAtLeast(0L)
+                val ec = error.errorCode
+                if (ec == androidx.media3.common.PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED || ec == androidx.media3.common.PlaybackException.ERROR_CODE_IO_INVALID_HTTP_CONTENT_TYPE || ec == androidx.media3.common.PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS) {
+                    driveBlockedUntil = System.currentTimeMillis() + 10 * 60_000L
+                    stopPrefetch()
+                }
+                if (diagText.isBlank()) playlist.getOrNull(player.currentMediaItemIndex)?.let { diagnose(it) }
                 if (retryCount < 6 && playerOpen) {
                     retryCount++
                     val waitMs = (1000L shl (retryCount - 1)).coerceAtMost(32000L)
@@ -261,10 +269,35 @@ class MainActivity : ComponentActivity() {
         val length = simpleCache.getContentMetadata(key).get(androidx.media3.datasource.cache.ContentMetadata.KEY_CONTENT_LENGTH, -1L)
         return length > 1_000_000L && simpleCache.isCached(key, 0L, length)
     }
+    // Bağlantı hatasında sunucunun gerçekte ne döndürdüğünü ekranda göster.
+    private fun diagnose(n: Node) {
+        val uri = n.uri ?: return
+        if (uri.scheme != "https") return
+        diagText = "Bağlantı denetleniyor…"
+        Thread {
+            val msg = try {
+                val c = URL(uri.toString()).openConnection() as java.net.HttpURLConnection
+                c.connectTimeout = 10000; c.readTimeout = 10000
+                c.setRequestProperty("Range", "bytes=0-511")
+                c.setRequestProperty("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/128.0.0.0 Safari/537.36")
+                c.setRequestProperty("Referer", "https://drive.google.com/")
+                val code = c.responseCode
+                val ct = c.contentType ?: "?"
+                val host = c.url.host
+                val raw = (if (code in 200..399) c.inputStream else c.errorStream)?.use { it.readNBytes(400) } ?: ByteArray(0)
+                val body = if (ct.startsWith("text/") || ct.contains("json")) String(raw, Charsets.UTF_8).replace(Regex("<[^>]*>"), " ").replace(Regex("\\s+"), " ").trim().take(150) else "(ikili veri)"
+                "Sunucu: $host  ·  HTTP $code  ·  $ct\n$body"
+            } catch (e: Exception) {
+                "Bağlantı hatası: " + e.javaClass.simpleName + " " + (e.message ?: "")
+            }
+            runOnUiThread { diagText = msg }
+        }.apply { isDaemon = true; start() }
+    }
+
     // Kartın üstüne gelince videonun ilk 6 MB'ını önceden indir: açılış hızlanır.
     private fun warmUp(n: Node) {
         val uri = n.uri ?: return
-        if (n.folder || n.pdf || n.image || uri.scheme != "https" || playbackActive || offlineReady[n.id] == true) return
+        if (n.folder || n.pdf || n.image || uri.scheme != "https" || playbackActive || offlineReady[n.id] == true || System.currentTimeMillis() < driveBlockedUntil) return
         warmTask?.let { warmHandler.removeCallbacks(it) }
         runCatching { warmWriter?.cancel() }
         val g = ++warmGen
@@ -332,6 +365,8 @@ class MainActivity : ComponentActivity() {
         if (candidates.isEmpty()) { downloadStatus = "İndirilecek video yok"; return }
         Thread {
             var done = 0
+            var fails = 0
+            if (System.currentTimeMillis() < driveBlockedUntil) return@Thread
             runOnUiThread { downloadStatus = "Çevrimdışı hazırlık başlıyor…" }
             for (node in candidates) {
                 if (gen != prefetchGen) return@Thread
@@ -346,12 +381,19 @@ class MainActivity : ComponentActivity() {
                     val pl = simpleCache.getContentMetadata(key).get(androidx.media3.datasource.cache.ContentMetadata.KEY_CONTENT_LENGTH, -1L)
                     if (pl in 0L..1_000_000L) { simpleCache.removeResource(key); throw java.io.IOException("Geçersiz yanıt") }
                     done++
+                    fails = 0
                     if (gen == prefetchGen) runOnUiThread {
                         offlineReady[node.id] = isOfflineReady(node)
                         downloadStatus = "Çevrimdışı hazırlanıyor: $done/${candidates.size}"
                     }
                 } catch (_: Exception) {
                     if (gen != prefetchGen) return@Thread
+                    fails++
+                    if (fails >= 2) {
+                        driveBlockedUntil = System.currentTimeMillis() + 10 * 60_000L
+                        runOnUiThread { downloadStatus = "Drive indirmeye izin vermiyor, 10 dk sonra tekrar denenecek" }
+                        return@Thread
+                    }
                     runOnUiThread { downloadStatus = "İndirme durakladı: ${node.name}" }
                 } finally {
                     prefetchWriter = null
@@ -449,6 +491,7 @@ class MainActivity : ComponentActivity() {
 
     private fun open(n: Node) {
         playerError = ""
+        diagText = ""
         if (n.folder) { stack.add(Pair(n.id, n.name)); load(); return }
         if (n.pdf || n.image) { openDocument(n); return }
         val v = nodes.filter { !it.folder && !it.pdf && !it.image }
@@ -917,6 +960,11 @@ class MainActivity : ComponentActivity() {
             if (playerStatus.isNotBlank() && playerError.isBlank()) {
                 Text(playerStatus, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.align(Alignment.Center).background(Color(0x99000000), RoundedCornerShape(12.dp)).padding(horizontal = 22.dp, vertical = 14.dp))
+            }
+            if (diagText.isNotBlank() && (playerStatus.isNotBlank() || playerError.isNotBlank())) {
+                Text(diagText, color = Color(0xFFFFD28A), fontSize = 12.sp, textAlign = TextAlign.Center,
+                    modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 36.dp, start = 24.dp, end = 24.dp)
+                        .background(Color(0xAA000000), RoundedCornerShape(10.dp)).padding(horizontal = 14.dp, vertical = 8.dp))
             }
             if (playerError.isNotBlank()) {
                 Column(Modifier.align(Alignment.Center).padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
