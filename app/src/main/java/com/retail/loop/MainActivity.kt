@@ -157,6 +157,7 @@ class MainActivity : ComponentActivity() {
             .setAllowCrossProtocolRedirects(true)
             .setConnectTimeoutMs(15000)
             .setReadTimeoutMs(20000)
+            .setDefaultRequestProperties(mapOf("Range" to "bytes=0-"))
         val upstream = DefaultDataSource.Factory(this, httpFactory)
         val freeBytes = filesDir.usableSpace.coerceAtLeast(256L * 1024 * 1024)
         val cacheLimit = minOf(24L * 1024 * 1024 * 1024, (freeBytes * 0.60).toLong()).coerceAtLeast(256L * 1024 * 1024)
@@ -206,6 +207,7 @@ class MainActivity : ComponentActivity() {
                     bypassCache = true
                     playlist.getOrNull(player.currentMediaItemIndex)?.uri?.let { u -> runCatching { simpleCache.removeResource(cacheKey(u)) } }
                     stopPrefetch()
+                    if (diagText.isBlank()) playlist.getOrNull(player.currentMediaItemIndex)?.let { diagnose(it) }
                 }
                                 if (retryCount < 6 && playerOpen) {
                     retryCount++
@@ -341,23 +343,19 @@ class MainActivity : ComponentActivity() {
     private fun diagnose(n: Node) {
         val uri = n.uri ?: return
         if (uri.scheme != "https") return
-        diagText = "Bağlantı denetleniyor…"
         Thread {
             val msg = try {
                 val c = URL(uri.toString()).openConnection() as java.net.HttpURLConnection
                 c.connectTimeout = 10000; c.readTimeout = 10000
-                c.setRequestProperty("Range", "bytes=0-511")
-                c.setRequestProperty("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/128.0.0.0 Safari/537.36")
-                c.setRequestProperty("Referer", "https://drive.google.com/")
+                c.setRequestProperty("Range", "bytes=0-")
                 val code = c.responseCode
                 val ct = c.contentType ?: "?"
-                val host = c.url.host
-                val raw = (if (code in 200..399) c.inputStream else c.errorStream)?.use { it.readNBytes(400) } ?: ByteArray(0)
-                val body = if (ct.startsWith("text/") || ct.contains("json")) String(raw, Charsets.UTF_8).replace(Regex("<[^>]*>"), " ").replace(Regex("\\s+"), " ").trim().take(150) else "(ikili veri)"
-                "Sunucu: $host  ·  HTTP $code  ·  $ct\n$body"
-            } catch (e: Exception) {
-                "Bağlantı hatası: " + e.javaClass.simpleName + " " + (e.message ?: "")
-            }
+                val len = c.getHeaderField("Content-Range") ?: c.getHeaderField("Content-Length") ?: "?"
+                val raw = (if (code in 200..399) c.inputStream else c.errorStream)?.use { it.readNBytes(48) } ?: ByteArray(0)
+                c.disconnect()
+                val ascii = String(raw.map { if (it in 32..126) it.toInt().toChar() else '.' }.toCharArray())
+                "HTTP $code · $ct · $len\nilk bayt: " + ascii.take(48)
+            } catch (e: Exception) { "Kontrol hatası: " + e.javaClass.simpleName }
             runOnUiThread { diagText = msg }
         }.apply { isDaemon = true; start() }
     }
@@ -1030,7 +1028,7 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.align(Alignment.Center).background(Color(0x99000000), RoundedCornerShape(12.dp)).padding(horizontal = 22.dp, vertical = 14.dp))
             }
             if (lastErr.isNotBlank() && (playerStatus.isNotBlank() || playerError.isNotBlank())) {
-                Text("HATA: " + lastErr, color = Color(0xFFFFD28A), fontSize = 12.sp, textAlign = TextAlign.Center,
+                Text("HATA: " + lastErr + (if (diagText.isNotBlank()) "\n" + diagText else ""), color = Color(0xFFFFD28A), fontSize = 12.sp, textAlign = TextAlign.Center,
                     modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 36.dp, start = 24.dp, end = 24.dp)
                         .background(Color(0xAA000000), RoundedCornerShape(10.dp)).padding(horizontal = 14.dp, vertical = 8.dp))
             }
