@@ -157,7 +157,8 @@ class MainActivity : ComponentActivity() {
             .setAllowCrossProtocolRedirects(true)
             .setConnectTimeoutMs(15000)
             .setReadTimeoutMs(20000)
-            .setDefaultRequestProperties(mapOf("Range" to "bytes=0-"))
+            .setUserAgent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/128.0.0.0 Safari/537.36")
+            .setDefaultRequestProperties(mapOf("Range" to "bytes=0-", "Referer" to "https://drive.google.com/", "Accept" to "*/*"))
         val upstream = DefaultDataSource.Factory(this, httpFactory)
         val freeBytes = filesDir.usableSpace.coerceAtLeast(256L * 1024 * 1024)
         val cacheLimit = minOf(24L * 1024 * 1024 * 1024, (freeBytes * 0.60).toLong()).coerceAtLeast(256L * 1024 * 1024)
@@ -340,23 +341,52 @@ class MainActivity : ComponentActivity() {
         return length > 1_000_000L && simpleCache.isCached(key, 0L, length)
     }
     // Bağlantı hatasında sunucunun gerçekte ne döndürdüğünü ekranda göster.
+    // Drive video yerine onay/uyarı sayfası döndürürse: sayfadaki "yine de indir" formunu bulup o adresle devam et.
+    @Volatile private var resolving = false
     private fun diagnose(n: Node) {
         val uri = n.uri ?: return
-        if (uri.scheme != "https") return
+        if (uri.scheme != "https" || resolving) return
+        resolving = true
+        val idx = player.currentMediaItemIndex
         Thread {
-            val msg = try {
+            var msg: String
+            try {
                 val c = URL(uri.toString()).openConnection() as java.net.HttpURLConnection
                 c.connectTimeout = 10000; c.readTimeout = 10000
-                c.setRequestProperty("Range", "bytes=0-")
+                c.setRequestProperty("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/128.0.0.0 Safari/537.36")
+                c.setRequestProperty("Referer", "https://drive.google.com/")
                 val code = c.responseCode
                 val ct = c.contentType ?: "?"
-                val len = c.getHeaderField("Content-Range") ?: c.getHeaderField("Content-Length") ?: "?"
-                val raw = (if (code in 200..399) c.inputStream else c.errorStream)?.use { it.readNBytes(48) } ?: ByteArray(0)
-                c.disconnect()
-                val ascii = String(raw.map { if (it in 32..126) it.toInt().toChar() else '.' }.toCharArray())
-                "HTTP $code · $ct · $len\nilk bayt: " + ascii.take(48)
-            } catch (e: Exception) { "Kontrol hatası: " + e.javaClass.simpleName }
-            runOnUiThread { diagText = msg }
+                val stream = if (code in 200..399) c.inputStream else c.errorStream
+                if (ct.startsWith("text/html")) {
+                    val html = stream?.use { it.readNBytes(60000) }?.toString(Charsets.UTF_8) ?: ""
+                    c.disconnect()
+                    val form = Regex("(?is)<form[^>]*id=\"download-form\"[^>]*action=\"([^\"]+)\"[^>]*>(.*?)</form>").find(html)
+                    if (form != null) {
+                        val action = Html.fromHtml(form.groupValues[1], Html.FROM_HTML_MODE_LEGACY).toString()
+                        val q = Regex("(?i)<input[^>]*name=\"([^\"]+)\"[^>]*value=\"([^\"]*)\"").findAll(form.groupValues[2])
+                            .joinToString("&") { URLEncoder.encode(it.groupValues[1], "UTF-8") + "=" + URLEncoder.encode(Html.fromHtml(it.groupValues[2], Html.FROM_HTML_MODE_LEGACY).toString(), "UTF-8") }
+                        val fixed = Uri.parse(action + (if (action.contains("?")) "&" else "?") + q)
+                        runOnUiThread {
+                            retryHandler.removeCallbacksAndMessages(null)
+                            if (idx in 0 until player.mediaItemCount) {
+                                val it0 = player.getMediaItemAt(idx)
+                                player.replaceMediaItem(idx, it0.buildUpon().setUri(fixed).build())
+                                player.prepare(); player.play()
+                                playerStatus = "Drive onayı geçiliyor…"
+                            }
+                        }
+                        msg = "Drive onay sayfası bulundu, yeniden deneniyor"
+                    } else {
+                        val txt = html.replace(Regex("(?is)<(script|style)[^>]*>.*?</\\1>"), " ").replace(Regex("<[^>]*>"), " ").replace(Regex("\\s+"), " ").trim()
+                        msg = "Drive sayfası ($code): " + txt.take(220)
+                    }
+                } else {
+                    c.disconnect()
+                    msg = "HTTP $code · $ct"
+                }
+            } catch (e: Exception) { msg = "Kontrol hatası: " + e.javaClass.simpleName }
+            runOnUiThread { diagText = msg; resolving = false }
         }.apply { isDaemon = true; start() }
     }
 
