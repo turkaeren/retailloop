@@ -149,16 +149,11 @@ class MainActivity : ComponentActivity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         loopMode = prefs.getInt("loop", 1)
         kiosk = prefs.getBoolean("kiosk", false)
+        // İlk sürümdeki sade ayar: tarayıcı kimliği/Referer yok, Drive'ı şüphelendirmesin.
         val httpFactory = DefaultHttpDataSource.Factory()
-            .setUserAgent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/128.0.0.0 Safari/537.36")
             .setAllowCrossProtocolRedirects(true)
-            .setConnectTimeoutMs(20000)
-            .setReadTimeoutMs(45000)
-            .setDefaultRequestProperties(mapOf("Referer" to "https://drive.google.com/", "Accept" to "*/*"))
-            .setContentTypePredicate(com.google.common.base.Predicate<String> { ct ->
-                val t = (ct ?: "").lowercase()
-                !(t.startsWith("text/") || t.contains("json") || t.contains("xml"))
-            })
+            .setConnectTimeoutMs(15000)
+            .setReadTimeoutMs(20000)
         val upstream = DefaultDataSource.Factory(this, httpFactory)
         val freeBytes = filesDir.usableSpace.coerceAtLeast(256L * 1024 * 1024)
         val cacheLimit = minOf(24L * 1024 * 1024 * 1024, (freeBytes * 0.60).toLong()).coerceAtLeast(256L * 1024 * 1024)
@@ -169,12 +164,11 @@ class MainActivity : ComponentActivity() {
         val memMb = (getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager).memoryClass
         val bufMb = (memMb / 3).coerceIn(32, 96)
         val lc = DefaultLoadControl.Builder()
-            .setBufferDurationsMs(20000, 90000, 2500, 6000)
+            .setBufferDurationsMs(15000, 60000, 1000, 2500)
             .setTargetBufferBytes(bufMb * 1024 * 1024)
             .setPrioritizeTimeOverSizeThresholds(true).build()
         val rf = DefaultRenderersFactory(this).setEnableDecoderFallback(true).forceEnableMediaCodecAsynchronousQueueing()
         val sourceFactory = DefaultMediaSourceFactory(cacheFactory)
-            .setLoadErrorHandlingPolicy(androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy(10))
         player = ExoPlayer.Builder(this, rf).setLoadControl(lc).setMediaSourceFactory(sourceFactory)
             .build().apply { playWhenReady = true; setSeekParameters(SeekParameters.CLOSEST_SYNC) }
         player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
@@ -899,7 +893,7 @@ class MainActivity : ComponentActivity() {
         var focused by remember { mutableStateOf(false) }
         val shape = RoundedCornerShape(10.dp)
         Row(
-            Modifier.fillMaxWidth().onFocusChanged { focused = it.isFocused; if (it.isFocused) warmUp(n) }
+            Modifier.fillMaxWidth().onFocusChanged { focused = it.isFocused; }
                 .background(if (focused) Color(0xFF303239) else Color(0xFF1C1E23), shape)
                 .border(if (focused) 2.dp else 1.dp, if (focused) Color.White else Color(0xFF303239), shape)
                 .clip(shape).focusable().clickable { click() }.padding(10.dp),
