@@ -565,13 +565,15 @@ class MainActivity : ComponentActivity() {
         BoxWithConstraints(Modifier.fillMaxSize().background(Color(0xFF0D0F14))) {
             val compact = maxWidth < 760.dp
             val navWidth = if (compact) 176.dp else 236.dp
-            val videos = nodes.filter { !it.folder && !it.pdf }
+            val videos = nodes.filter { !it.folder && !it.pdf && !it.image }
             val folders = nodes.filter { it.folder }
             val pdfs = nodes.filter { it.pdf }
+            val images = nodes.filter { it.image }
             val visible = when (section) {
                 "Videolar" -> videos
                 "Klasörler" -> folders
                 "PDF Belgeleri" -> pdfs
+                "Görseller" -> images
                 else -> nodes
             }
             Row(Modifier.fillMaxSize()) {
@@ -607,6 +609,10 @@ class MainActivity : ComponentActivity() {
                         section = "PDF Belgeleri"
                         if (stack.last().first != Config.FOLDER_ID) { stack.clear(); stack.add(Pair(Config.FOLDER_ID, Config.ROOT_TITLE)); load() }
                     }
+                    SidebarItem("Görseller", "▧", section == "Görseller", compact) {
+                        section = "Görseller"
+                        if (stack.last().first != Config.FOLDER_ID) { stack.clear(); stack.add(Pair(Config.FOLDER_ID, Config.ROOT_TITLE)); load() }
+                    }
                     Spacer(Modifier.height(22.dp))
                     Text("DEPOLAMA", color = Color(0xFF747B8C), fontSize = 9.sp, letterSpacing = 1.7.sp,
                         modifier = Modifier.padding(start = 10.dp, bottom = 10.dp))
@@ -620,7 +626,7 @@ class MainActivity : ComponentActivity() {
                     Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 10.dp)) {
                         Text(if (loading) "İÇERİKLER YÜKLENİYOR" else "KÜTÜPHANE HAZIR",
                             color = Color(0xFF858B9A), fontSize = 9.sp, letterSpacing = 1.1.sp)
-                        Text(videos.size.toString() + " video  ·  " + folders.size.toString() + " klasör",
+                        Text(videos.size.toString() + " video · " + pdfs.size + " PDF · " + images.size + " görsel",
                             color = Color(0xFFB7BBC5), fontSize = 11.sp, modifier = Modifier.padding(top = 5.dp))
                     }
                 }
@@ -640,6 +646,7 @@ class MainActivity : ComponentActivity() {
                                     "Videolar" -> "İzlemeye hazır videolar"
                                     "Klasörler" -> "Eğitim içeriklerinin klasörleri"
                                     "PDF Belgeleri" -> "Dokümanlar ve eğitim materyalleri"
+                                    "Görseller" -> "JPEG, PNG ve diğer görseller"
                                     "USB / Depolama" -> "Bağlı harici depolama"
                                     else -> "İçeriklerini tek ekrandan yönet"
                                 },
@@ -720,16 +727,16 @@ class MainActivity : ComponentActivity() {
                 .clip(RoundedCornerShape(6.dp))
                 .background(if (n.folder) Color(0xFF303A4A) else if (n.pdf) Color(0xFF493039) else Color(0xFF292D36)),
                 contentAlignment = Alignment.Center) {
-                Text(if (n.folder) "▰" else if (n.pdf) "PDF" else "▶",
-                    color = if (n.pdf) Color(0xFFFF9AA7) else Color.White,
-                    fontSize = if (n.pdf) 17.sp else 25.sp, fontWeight = FontWeight.Bold)
+                Text(if (n.folder) "▰" else if (n.pdf) "PDF" else if (n.image) "JPG" else "▶",
+                    color = if (n.pdf || n.image) Color(0xFFFF9AA7) else Color.White,
+                    fontSize = if (n.pdf || n.image) 17.sp else 25.sp, fontWeight = FontWeight.Bold)
             }
             Spacer(Modifier.width(13.dp))
             Column(Modifier.weight(1f)) {
                 Text(n.name, color = Color.White, fontSize = if (compact) 13.sp else 15.sp,
                     fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Spacer(Modifier.height(5.dp))
-                Text(if (n.folder) "KLASÖR" else if (n.pdf) "PDF BELGESİ" else "VİDEO",
+                Text(if (n.folder) "KLASÖR" else if (n.pdf) "PDF BELGESİ" else if (n.image) "GÖRSEL" else "VİDEO",
                     color = Color(0xFF9B9EA7), fontSize = 9.sp, letterSpacing = 1.2.sp)
                 if (isOfflineReady(n)) Text("ÇEVRİMDIŞI HAZIR", color = Color(0xFF7EE0B0), fontSize = 9.sp, fontWeight = FontWeight.Bold)
             }
@@ -792,19 +799,7 @@ class MainActivity : ComponentActivity() {
                             Text("ŞİMDİ OYNATILIYOR", color = Color(0xFF9AA3C0), fontSize = if (compact) 10.sp else 13.sp)
                             Text(playlist.getOrNull(current)?.name ?: "", color = Color.White, fontSize = if (compact) 16.sp else 24.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
-                        Box {
-                            PlayerChip("${playbackSpeed}x", false) { speedMenu = true; tick++ }
-                            DropdownMenu(expanded = speedMenu, onDismissRequest = { speedMenu = false }) {
-                                listOf(0.25f, 0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f).forEach { speed ->
-                                    DropdownMenuItem(
-                                        text = { Text(if (speed == 1f) "Normal  (1.0x)" else "${speed}x") },
-                                        onClick = { setSpeed(speed); speedMenu = false; overlay = true; tick++ }
-                                    )
-                                }
-                            }
-                        }
-                        Spacer(Modifier.width(8.dp))
-                        PlayerChip(if (fullscreen) "⤢ Küçült" else "⛶ Tam ekran", false) { applyFullscreen(!fullscreen); overlay = true; tick++ }
+
                     }
                     Spacer(Modifier.height(if (compact) 4.dp else 8.dp))
                     Slider(
@@ -821,32 +816,37 @@ class MainActivity : ComponentActivity() {
                         Text(formatTime(playDuration), color = Color.White, fontSize = if (compact) 10.sp else 12.sp)
                     }
                     Spacer(Modifier.height(if (compact) 6.dp else 10.dp))
-                    Row(
-                        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.Center,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        if (playerError.isNotBlank()) PlayerChip("↻ Tekrar dene", true) { retryPlayback(); overlay = true; tick++ }
-                        PlayerChip("⏮", false) { if (current > 0) play(current - 1); overlay = true; tick++ }
-                        PlayerChip("↶ 10 sn", false) { seekBy(-10000); overlay = true; tick++ }
-                        PlayerChip(if (player.isPlaying) "Ⅱ" else "▶", true) { if (player.isPlaying) player.pause() else player.play(); overlay = true; tick++ }
-                        PlayerChip("10 sn ↷", false) { seekBy(10000); overlay = true; tick++ }
-                        PlayerChip("⏭", false) { if (current < playlist.lastIndex) play(current + 1); overlay = true; tick++ }
-                        PlayerChip("■", false) { stopPlay() }
-                        PlayerChip(if (loopMode == 0) "Tekrar: Video" else if (loopMode == 1) "Tekrar: Liste" else "Tekrar: Kapalı", false) { loopMode = (loopMode + 1) % 3; applyLoop(); overlay = true; tick++ }
-                    }
-                    Spacer(Modifier.height(if (compact) 6.dp else 12.dp))
+                    Spacer(Modifier.height(if (compact) 8.dp else 14.dp))
                     val st = rememberLazyListState()
                     LaunchedEffect(overlay) { if (overlay) st.scrollToItem(current) }
                     LazyRow(state = st, contentPadding = PaddingValues(horizontal = 4.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         itemsIndexed(playlist) { i, d -> PlaylistCard(i, d, i == current) { play(i); overlay = true; tick++ } }
                     }
+                    Spacer(Modifier.height(if (compact) 8.dp else 14.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                        if (playerError.isNotBlank()) PlayerChip("↻", false) { retryPlayback(); overlay = true; tick++ }
+                        PlayerChip("⏮", false) { if (current > 0) play(current - 1); overlay = true; tick++ }
+                        PlayerChip("↶ 10", false) { seekBy(-10000); overlay = true; tick++ }
+                        PlayerChip(if (player.isPlaying) "Ⅱ" else "▶", true) { if (player.isPlaying) player.pause() else player.play(); overlay = true; tick++ }
+                        PlayerChip("10 ↷", false) { seekBy(10000); overlay = true; tick++ }
+                        PlayerChip("⏭", false) { if (current < playlist.lastIndex) play(current + 1); overlay = true; tick++ }
+                        PlayerChip("■", false) { stopPlay() }
+                    }
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                        Box {
+                            PlayerChip("${playbackSpeed}x", false) { speedMenu = true; tick++ }
+                            DropdownMenu(expanded = speedMenu, onDismissRequest = { speedMenu = false }) {
+                                listOf(0.25f, 0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f).forEach { speed ->
+                                    DropdownMenuItem(text = { Text("${speed}x") }, onClick = { setSpeed(speed); speedMenu = false; overlay = true; tick++ })
+                                }
+                            }
+                        }
+                        PlayerChip(if (loopMode == 0) "Tekrar: Video" else if (loopMode == 1) "Tekrar: Liste" else "Tekrar: Kapalı", false) { loopMode = (loopMode + 1) % 3; applyLoop(); overlay = true; tick++ }
+                        PlayerChip(if (fullscreen) "⤢" else "⛶", false) { applyFullscreen(!fullscreen); overlay = true; tick++ }
+                    }
                 }
             }
-            if (!overlay) {
-                Text("Ekrana dokun: kontroller", color = Color.White.copy(alpha = 0.65f), fontSize = 11.sp,
-                    modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 12.dp))
-            }
+
         }
     }
 
@@ -896,8 +896,8 @@ class MainActivity : ComponentActivity() {
         Box(Modifier.onFocusChanged { f = it.isFocused }.scale(if (f) 1.08f else 1f)
             .clip(RoundedCornerShape(50)).background(if (on) Color(0xFF7C9CFF) else Color(0x33FFFFFF))
             .border(if (f) 3.dp else 0.dp, Color.White, RoundedCornerShape(50))
-            .focusable().clickable { click() }.padding(horizontal = 20.dp, vertical = 10.dp)) {
-            Text(t, color = if (on) Color(0xFF0A0C14) else Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+            .focusable().clickable { click() }.padding(horizontal = 12.dp, vertical = 7.dp)) {
+            Text(t, color = if (on) Color(0xFF0A0C14) else Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium)
         }
     }
 
