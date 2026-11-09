@@ -286,6 +286,7 @@ class MainActivity : ComponentActivity() {
         java.net.CookieHandler.setDefault(java.net.CookieManager())
         startSync()
         window.decorView.postDelayed({ ensureStorageAccess() }, 3000)
+        refreshHandler.postDelayed(refreshTick, 3 * 60_000L)
     }
 
     // ---- TV deposuna indirme (kalıcı, çevrimdışı oynatma) ----
@@ -527,9 +528,10 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    override fun onResume() { super.onResume(); checkUpdate() }
+    override fun onResume() { super.onResume(); checkUpdate(); silentRefresh() }
 
     override fun onDestroy() {
+        refreshHandler.removeCallbacksAndMessages(null)
         prefetchCancelled = true
         stopPrefetch()
         retryHandler.removeCallbacksAndMessages(null)
@@ -808,6 +810,31 @@ class MainActivity : ComponentActivity() {
         connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/120.0.0.0 Mobile Safari/537.36")
         connection.setRequestProperty("Accept", "text/html,application/xhtml+xml")
         return connection.getInputStream().bufferedReader(Charsets.UTF_8).use { it.readText() }
+    }
+
+    // Açık klasörün listesi Drive'dan her 3 dakikada sessizce yenilenir; değişiklik varsa ekrana yansır.
+    private val refreshHandler = Handler(Looper.getMainLooper())
+    private val refreshTick = object : Runnable {
+        override fun run() { silentRefresh(); refreshHandler.postDelayed(this, 3 * 60_000L) }
+    }
+    private fun silentRefresh() {
+        val id = stack.last().first
+        if (id == "usb" || playbackActive || loading || viewerNode != null) return
+        Thread {
+            try {
+                val txt = fetchPublicFolder(id)
+                val fresh = parse(txt)
+                runOnUiThread {
+                    if (stack.last().first == id && !playbackActive && fresh.isNotEmpty() &&
+                        fresh.map { it.id + "|" + it.name } != nodes.map { it.id + "|" + it.name }) {
+                        prefs.edit().putString("f_$id", txt).apply()
+                        nodes.clear(); nodes.addAll(fresh)
+                        message = ""
+                        refreshOffline()
+                    }
+                }
+            } catch (_: Exception) { }
+        }.apply { name = "RetailLoop-ListRefresh"; isDaemon = true; start() }
     }
 
     private fun load() {
