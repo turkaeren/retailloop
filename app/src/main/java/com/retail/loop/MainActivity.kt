@@ -214,6 +214,7 @@ class MainActivity : ComponentActivity() {
         prefetchCancelled = true
         retryHandler.removeCallbacksAndMessages(null)
         runCatching { unregisterReceiver(mountReceiver) }
+        closeDocument()
         player.release()
         if (::simpleCache.isInitialized) simpleCache.release()
         super.onDestroy()
@@ -355,6 +356,74 @@ class MainActivity : ComponentActivity() {
         playbackSpeed = 1f
         player.setPlaybackParameters(PlaybackParameters(1f))
     }
+    private fun closeDocument() {
+        viewerLoadToken++
+        runCatching { pdfRenderer?.close() }
+        runCatching { pdfDescriptor?.close() }
+        pdfRenderer = null
+        pdfDescriptor = null
+        viewerBitmap?.recycle()
+        viewerBitmap = null
+        viewerNode = null
+        viewerError = ""
+    }
+
+    private fun openDocument(node: Node) {
+        closeDocument()
+        viewerNode = node
+        viewerPage = 0
+        viewerPageCount = 1
+        val token = ++viewerLoadToken
+        Thread {
+            try {
+                val file = File(cacheDir, "viewer_" + node.id.replace(Regex("[^A-Za-z0-9_-]"), "_"))
+                if (node.uri?.scheme == "content") {
+                    contentResolver.openInputStream(node.uri)?.use { input -> file.outputStream().use { input.copyTo(it) } }
+                } else {
+                    val connection = URL(node.uri.toString()).openConnection()
+                    connection.connectTimeout = 20000
+                    connection.readTimeout = 45000
+                    connection.setRequestProperty("User-Agent", "Mozilla/5.0")
+                    connection.setRequestProperty("Referer", "https://drive.google.com/")
+                    connection.getInputStream().use { input -> file.outputStream().use { input.copyTo(it) } }
+                }
+                if (node.pdf) {
+                    val fd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+                    val renderer = PdfRenderer(fd)
+                    if (token != viewerLoadToken) { renderer.close(); fd.close(); return@Thread }
+                    pdfDescriptor = fd
+                    pdfRenderer = renderer
+                    viewerPageCount = renderer.pageCount
+                    renderPdfPage(0)
+                } else {
+                    val bitmap = BitmapFactory.decodeFile(file.absolutePath) ?: error("Görsel dosyası okunamadı")
+                    runOnUiThread { if (token == viewerLoadToken) viewerBitmap = bitmap else bitmap.recycle() }
+                }
+            } catch (e: Exception) {
+                runOnUiThread { if (token == viewerLoadToken) viewerError = e.message ?: "Dosya açılamadı" }
+            }
+        }.start()
+    }
+
+    private fun renderPdfPage(index: Int) {
+        val renderer = pdfRenderer ?: return
+        if (index !in 0 until renderer.pageCount) return
+        try {
+            val page = renderer.openPage(index)
+            val scale = minOf(2.0, 2200.0 / maxOf(page.width, page.height))
+            val bitmap = Bitmap.createBitmap((page.width * scale).toInt().coerceAtLeast(1), (page.height * scale).toInt().coerceAtLeast(1), Bitmap.Config.ARGB_8888)
+            page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+            page.close()
+            runOnUiThread {
+                viewerBitmap?.recycle()
+                viewerBitmap = bitmap
+                viewerPage = index
+            }
+        } catch (e: Exception) {
+            runOnUiThread { viewerError = e.message ?: "PDF sayfası görüntülenemedi" }
+        }
+    }
+
     private fun up() { if (stack.size > 1) { stack.removeAt(stack.lastIndex); load() } }
     private fun stopPlay() {
         retryHandler.removeCallbacksAndMessages(null)
@@ -456,11 +525,12 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun Ui() {
+        BackHandler(viewerNode != null) { closeDocument() }
         BackHandler(playerOpen && overlay) { overlay = false }
         BackHandler(playerOpen && !overlay) { stopPlay() }
         BackHandler(!playerOpen && stack.size > 1) { up() }
         MaterialTheme(colorScheme = darkColorScheme(primary = Color(0xFF7C9CFF))) {
-            Box(Modifier.fillMaxSize().background(Color(0xFF0A0C14))) { if (playerOpen) PlayerScreen() else Browser() }
+            Box(Modifier.fillMaxSize().background(Color(0xFF0A0C14))) { if (viewerNode != null) ViewerScreen() else if (playerOpen) PlayerScreen() else Browser() }
         }
     }
 
@@ -776,6 +846,41 @@ class MainActivity : ComponentActivity() {
             if (!overlay) {
                 Text("Ekrana dokun: kontroller", color = Color.White.copy(alpha = 0.65f), fontSize = 11.sp,
                     modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 12.dp))
+            }
+        }
+    }
+
+    @Composable
+    private fun ViewerScreen() {
+        val node = viewerNode
+        Column(Modifier.fillMaxSize().background(Color(0xFF090B10))) {
+            Row(Modifier.fillMaxWidth().background(Color(0xFF171B25)).padding(horizontal = 24.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(if (node?.pdf == true) "PDF GÖRÜNTÜLEYİCİ" else "GÖRSEL GÖRÜNTÜLEYİCİ", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.weight(1f))
+                Text(node?.name ?: "", color = Color(0xFFB8BECA), fontSize = 12.sp, maxLines = 1)
+                Spacer(Modifier.width(20.dp))
+                PlayerChip("Kapat", false) { closeDocument() }
+            }
+            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                val bitmap = viewerBitmap
+                if (bitmap != null) {
+                    AndroidView(factory = { context -> ImageView(context).apply {
+                        layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+                        scaleType = ImageView.ScaleType.FIT_CENTER
+                        adjustViewBounds = true
+                    } }, update = { it.setImageBitmap(bitmap) }, modifier = Modifier.fillMaxSize())
+                } else if (viewerError.isNotBlank()) {
+                    Text("Dosya açılamadı: $viewerError", color = Color(0xFFFFAAB2), textAlign = TextAlign.Center, modifier = Modifier.padding(30.dp))
+                } else {
+                    CircularProgressIndicator(color = Color(0xFF7C9CFF))
+                }
+            }
+            if (node?.pdf == true) {
+                Row(Modifier.fillMaxWidth().background(Color(0xFF171B25)).padding(14.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                    PlayerChip("‹ Önceki", false) { if (viewerPage > 0) renderPdfPage(viewerPage - 1) }
+                    Text("${viewerPage + 1} / ${viewerPageCount}", color = Color.White, modifier = Modifier.padding(horizontal = 24.dp))
+                    PlayerChip("Sonraki ›", false) { if (viewerPage + 1 < viewerPageCount) renderPdfPage(viewerPage + 1) }
+                }
             }
         }
     }
