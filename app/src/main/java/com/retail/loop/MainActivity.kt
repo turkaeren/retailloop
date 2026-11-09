@@ -15,6 +15,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.foundation.*
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -239,12 +240,15 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onKeyDown(k: Int, e: KeyEvent): Boolean {
-        if (!playerOpen || !playing || overlay) return super.onKeyDown(k, e)
-        val n = playlist.size.coerceAtLeast(1)
+        if (!playerOpen || overlay) return super.onKeyDown(k, e)
         when (k) {
-            KeyEvent.KEYCODE_DPAD_RIGHT -> { play((current + 1) % n); return true }
-            KeyEvent.KEYCODE_DPAD_LEFT -> { play((current - 1 + n) % n); return true }
-            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_MENU -> { overlay = true; return true }
+            KeyEvent.KEYCODE_DPAD_RIGHT -> { seekBy(10_000); overlay = true; return true }
+            KeyEvent.KEYCODE_DPAD_LEFT -> { seekBy(-10_000); overlay = true; return true }
+            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_MENU -> {
+                if (player.isPlaying) player.pause() else player.play()
+                overlay = true
+                return true
+            }
         }
         return super.onKeyDown(k, e)
     }
@@ -256,6 +260,27 @@ class MainActivity : ComponentActivity() {
         BackHandler(!playerOpen && stack.size > 1) { up() }
         MaterialTheme(colorScheme = darkColorScheme(primary = Color(0xFF7C9CFF))) {
             Box(Modifier.fillMaxSize().background(Color(0xFF0A0C14))) { if (playerOpen) PlayerScreen() else Browser() }
+        }
+    }
+
+    @Composable
+    private fun BrandMark(size: androidx.compose.ui.unit.Dp) {
+        Box(Modifier.size(size).clip(RoundedCornerShape(12.dp))
+            .background(Brush.linearGradient(listOf(Color(0xFFFF5264), Color(0xFFB91F3B)))),
+            contentAlignment = Alignment.Center) {
+            Canvas(Modifier.fillMaxSize().padding(size * 0.19f)) {
+                drawRoundRect(Color.White.copy(alpha = 0.96f), topLeft = Offset(size.width * 0.05f, size.height * 0.12f),
+                    size = Size(size.width * 0.9f, size.height * 0.68f), cornerRadius = CornerRadius(size.width * 0.12f))
+                val p = Path().apply {
+                    moveTo(size.width * 0.42f, size.height * 0.25f)
+                    lineTo(size.width * 0.42f, size.height * 0.67f)
+                    lineTo(size.width * 0.72f, size.height * 0.46f)
+                    close()
+                }
+                drawPath(p, Color(0xFFD72E49))
+                drawLine(Color.White, Offset(size.width * 0.32f, size.height * 0.03f), Offset(size.width * 0.2f, 0f), strokeWidth = size.width * 0.055f)
+                drawLine(Color.White, Offset(size.width * 0.68f, size.height * 0.03f), Offset(size.width * 0.8f, 0f), strokeWidth = size.width * 0.055f)
+            }
         }
     }
 
@@ -276,8 +301,8 @@ class MainActivity : ComponentActivity() {
             }
             Column(Modifier.fillMaxSize().padding(horizontal = horizontal, vertical = if (compact) 14.dp else 26.dp)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text("▶", color = Color(0xFFE5394F), fontSize = 25.sp, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.width(10.dp))
+                    BrandMark(42.dp)
+                    Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) {
                         Text("TCL Akademi", color = Color.White, fontSize = if (compact) 20.sp else 25.sp, fontWeight = FontWeight.Bold)
                         Text("MEDYA KÜTÜPHANESİ", color = Color(0xFF92959D), fontSize = 9.sp, letterSpacing = 2.sp)
@@ -303,7 +328,7 @@ class MainActivity : ComponentActivity() {
                     listOf("Tümü", "Videolar", "Klasörler", "PDF'ler").forEach { item ->
                         Box(Modifier.clip(RoundedCornerShape(8.dp))
                             .background(if (category == item) Color(0xFFE5394F) else Color(0xFF24262B))
-                            .clickable { category = item }
+                            .focusable().clickable { category = item }
                             .padding(horizontal = 16.dp, vertical = 10.dp)) {
                             Text(item, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                         }
@@ -342,7 +367,7 @@ class MainActivity : ComponentActivity() {
             Modifier.fillMaxWidth().onFocusChanged { focused = it.isFocused }
                 .background(if (focused) Color(0xFF303239) else Color(0xFF1C1E23), shape)
                 .border(if (focused) 2.dp else 1.dp, if (focused) Color.White else Color(0xFF303239), shape)
-                .clip(shape).clickable { click() }.padding(10.dp),
+                .clip(shape).focusable().clickable { click() }.padding(10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Box(Modifier.size(if (compact) 92.dp else 116.dp, if (compact) 58.dp else 72.dp)
@@ -402,8 +427,8 @@ class MainActivity : ComponentActivity() {
                 }
             }
             // A tap anywhere on the video brings the YouTube-style controls back.
-            Box(Modifier.fillMaxSize().pointerInput(Unit) {
-                detectTapGestures(onTap = { overlay = true; tick++ })
+            Box(Modifier.fillMaxSize().pointerInput(overlay) {
+                detectTapGestures(onTap = { overlay = !overlay; tick++ })
             })
             AnimatedVisibility(overlay, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.BottomCenter)) {
                 Column(
@@ -483,7 +508,7 @@ class MainActivity : ComponentActivity() {
         Box(Modifier.onFocusChanged { f = it.isFocused }.scale(if (f) 1.08f else 1f)
             .clip(RoundedCornerShape(50)).background(if (on) Color(0xFF7C9CFF) else Color(0x33FFFFFF))
             .border(if (f) 3.dp else 0.dp, Color.White, RoundedCornerShape(50))
-            .clickable { click() }.padding(horizontal = 20.dp, vertical = 10.dp)) {
+            .focusable().clickable { click() }.padding(horizontal = 20.dp, vertical = 10.dp)) {
             Text(t, color = if (on) Color(0xFF0A0C14) else Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium)
         }
     }
@@ -494,7 +519,7 @@ class MainActivity : ComponentActivity() {
         val g = if (active) listOf(Color(0xFF4F6BFF), Color(0xFF9B5CFF)) else listOf(Color(0xFF2A2F45), Color(0xFF171A29))
         Box(Modifier.size(240.dp, 135.dp).onFocusChanged { f = it.isFocused }.scale(if (f) 1.1f else 1f)
             .clip(RoundedCornerShape(16.dp)).background(Brush.linearGradient(g))
-            .border(if (f) 3.dp else 0.dp, Color.White, RoundedCornerShape(16.dp)).clickable { click() }.padding(16.dp)) {
+            .border(if (f) 3.dp else 0.dp, Color.White, RoundedCornerShape(16.dp)).focusable().clickable { click() }.padding(16.dp)) {
             Text("%02d".format(i + 1), color = Color(0x55FFFFFF), fontSize = 44.sp, fontWeight = FontWeight.Black, modifier = Modifier.align(Alignment.TopStart))
             Text(d.name, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.align(Alignment.BottomStart))
             if (active) Text("▶", color = Color.White, fontSize = 18.sp, modifier = Modifier.align(Alignment.TopEnd))
