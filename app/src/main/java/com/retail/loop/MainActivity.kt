@@ -37,6 +37,13 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.zIndex
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.focus.FocusRequester
@@ -144,7 +151,7 @@ class MainActivity : ComponentActivity() {
     private var warmTask: Runnable? = null
 
     private val mountReceiver = object : BroadcastReceiver() {
-        override fun onReceive(c: Context?, i: Intent?) { window.decorView.postDelayed({ if (stack.last().first == "usb") load() }, 2500) }
+        override fun onReceive(c: Context?, i: Intent?) { window.decorView.postDelayed({ demoCacheAt = 0L; ensureStorageAccess(); refreshOffline(); if (stack.last().first == "usb") load() }, 2500) }
     }
     private val perm = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { if (stack.last().first == "usb") load() }
 
@@ -259,6 +266,7 @@ class MainActivity : ComponentActivity() {
         autoDownload = prefs.getBoolean("autodl", true)
         java.net.CookieHandler.setDefault(java.net.CookieManager())
         startSync()
+        window.decorView.postDelayed({ ensureStorageAccess() }, 3000)
     }
 
     // ---- TV deposuna indirme (kalıcı, çevrimdışı oynatma) ----
@@ -354,14 +362,15 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun deleteLocal(n: Node) {
-        runCatching { localFile(n.id).delete(); File(videoDir, n.id + ".part").delete() }
+        runCatching { listOfNotNull(demoDir(), internalVideoDir).forEach { File(it, n.id + ".vid").delete(); File(it, n.id + ".part").delete() } }
         offlineReady.remove(n.id); dlProgress.remove(n.id)
         toast("TV'den silindi: " + n.name)
     }
 
     private fun downloadOneImpl(n: Node, idx: Int, total: Int): Int {
         val dst = localFile(n.id)
-        val part = File(videoDir, n.id + ".part")
+        val ddir = downloadDir()
+        val part = File(ddir, n.id + ".part")
         var url = n.uri.toString()
         val ua = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/128.0.0.0 Safari/537.36"
         try {
@@ -391,7 +400,7 @@ class MainActivity : ComponentActivity() {
                 val size = if (code == 206) (c.getHeaderField("Content-Range")?.substringAfter('/')?.toLongOrNull() ?: -1L) else c.contentLengthLong
                 if (!append) part.delete()
                 val already = if (append) have else 0L
-                if (size > 0 && filesDir.usableSpace < (size - already) + 1536L * 1024 * 1024) { c.disconnect(); return 3 }
+                if (size > 0 && ddir.usableSpace < (size - already) + (if (ddir == internalVideoDir) 1536L else 200L) * 1024 * 1024) { c.disconnect(); return 3 }
                 var done = already
                 var lastUi = 0L
                 c.inputStream.use { ins ->
@@ -512,8 +521,45 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun cacheKey(uri: Uri): String = uri.getQueryParameter("id") ?: uri.toString()
-    private val videoDir by lazy { File(filesDir, "videos").apply { mkdirs() } }
-    private fun localFile(id: String) = File(videoDir, "$id.vid")
+    private val internalVideoDir by lazy { File(filesDir, "videos").apply { mkdirs() } }
+    private var demoCache: File? = null
+    private var demoCacheAt = 0L
+
+    // Harici depolamanın (USB/SD) kök klasörleri.
+    private fun removableRoots(): List<File> = runCatching {
+        getExternalFilesDirs(null).filterNotNull().drop(1).mapNotNull {
+            val path = it.absolutePath
+            val i = path.indexOf("/Android/")
+            if (i > 0) File(path.substring(0, i)) else null
+        }
+    }.getOrDefault(emptyList())
+
+    // Bağlı depolamada ".tclakademidemo" klasörü varsa indirmeler oraya gider.
+    private fun demoDir(): File? {
+        val now = System.currentTimeMillis()
+        if (now - demoCacheAt < 4000L) return demoCache
+        demoCache = removableRoots().map { File(it, ".tclakademidemo") }
+            .firstOrNull { runCatching { it.isDirectory && it.canWrite() }.getOrDefault(false) }
+        demoCacheAt = now
+        return demoCache
+    }
+    private fun downloadDir(): File = demoDir() ?: internalVideoDir
+    private fun localFile(id: String): File =
+        listOfNotNull(demoDir(), internalVideoDir).map { File(it, "$id.vid") }.firstOrNull { it.exists() }
+            ?: File(downloadDir(), "$id.vid")
+
+    // USB'ye yazabilmek için "tüm dosyalara erişim" izni (Android 11+).
+    private fun ensureStorageAccess() {
+        if (removableRoots().isEmpty()) return
+        if (Build.VERSION.SDK_INT >= 30) {
+            if (android.os.Environment.isExternalStorageManager()) return
+            val last = prefs.getLong("ask_all_files", 0L)
+            if (System.currentTimeMillis() - last < 12 * 3600_000L) return
+            prefs.edit().putLong("ask_all_files", System.currentTimeMillis()).apply()
+            toast("USB'ye indirmek için 'Tüm dosyalara erişim' iznini aç")
+            runCatching { startActivity(Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:$packageName"))) }
+        }
+    }
     private fun isOfflineReady(n: Node): Boolean {
         if (n.uri?.scheme != "https") return false
         val f = localFile(n.id)
@@ -1046,7 +1092,7 @@ class MainActivity : ComponentActivity() {
         var section by remember { mutableStateOf("Genel Bakış") }
         val firstNavFocus = remember { FocusRequester() }
         LaunchedEffect(Unit) { firstNavFocus.requestFocus() }
-        BoxWithConstraints(Modifier.fillMaxSize().background(Color(0xFF0D0F14))) {
+        BoxWithConstraints(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFF11141D), Color(0xFF080A10))))) {
             val compact = maxWidth < 760.dp
             val navWidth = if (compact) 176.dp else 236.dp
             val videos = nodes.filter { !it.folder && !it.pdf && !it.image }
@@ -1063,7 +1109,7 @@ class MainActivity : ComponentActivity() {
             Row(Modifier.fillMaxSize()) {
                 Column(
                     Modifier.width(navWidth).fillMaxHeight()
-                        .background(Color(0xFF151820))
+                        .background(Brush.verticalGradient(listOf(Color(0xFF171B26), Color(0xFF0E1018))))
                         .padding(horizontal = if (compact) 14.dp else 20.dp, vertical = 24.dp)
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1171,10 +1217,15 @@ class MainActivity : ComponentActivity() {
                         LazyVerticalGrid(
                             columns = GridCells.Adaptive(if (compact) 280.dp else 340.dp),
                             modifier = Modifier.fillMaxSize(),
-                            horizontalArrangement = Arrangement.spacedBy(14.dp),
-                            verticalArrangement = Arrangement.spacedBy(14.dp),
-                            contentPadding = PaddingValues(bottom = 24.dp, end = 4.dp)
+                            horizontalArrangement = Arrangement.spacedBy(18.dp),
+                            verticalArrangement = Arrangement.spacedBy(18.dp),
+                            contentPadding = PaddingValues(top = 10.dp, bottom = 30.dp, start = 10.dp, end = 12.dp)
                         ) {
+                            val lastId = prefs.getString("last_id", null)
+                            val hero = if (section == "Genel Bakış" && stack.size == 1) (videos.firstOrNull { it.id == lastId } ?: videos.firstOrNull()) else null
+                            if (hero != null) item(key = "hero", span = { GridItemSpan(maxLineSpan) }) {
+                                Hero(hero, if (hero.id == lastId) "SON İZLENEN" else "ÖNE ÇIKAN")
+                            }
                             items(visible, key = { it.id }) { n -> Tile(n, compact) { open(n) } }
                         }
                     }
@@ -1186,18 +1237,20 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun SidebarItem(label: String, symbol: String, selected: Boolean, compact: Boolean, requester: FocusRequester? = null, click: () -> Unit) {
         var focused by remember { mutableStateOf(false) }
-        val shape = RoundedCornerShape(10.dp)
+        val shape = RoundedCornerShape(14.dp)
         Row(
             Modifier.fillMaxWidth().padding(vertical = 3.dp)
                 .onFocusChanged { focused = it.isFocused }
                 .clip(shape)
                 .then(if (requester != null) Modifier.focusRequester(requester) else Modifier)
-                .background(when { focused -> Color(0xFF343B4A); selected -> Color(0xFF292F3D); else -> Color.Transparent })
-                .border(if (focused) 2.dp else 1.dp, if (focused) Color.White else if (selected) Color(0xFF41495B) else Color.Transparent, shape)
+                .background(when { focused -> Brush.horizontalGradient(listOf(Color(0xFF4A5470), Color(0xFF2C3347))); selected -> Brush.horizontalGradient(listOf(Color(0x33FF4D63), Color(0x11FF4D63))); else -> Brush.horizontalGradient(listOf(Color.Transparent, Color.Transparent)) })
+                .border(if (focused) 2.dp else 0.dp, if (focused) Color.White else Color.Transparent, shape)
                 .focusable().clickable { click() }
                 .padding(horizontal = if (compact) 10.dp else 14.dp, vertical = if (compact) 12.dp else 14.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            Box(Modifier.width(3.dp).height(18.dp).clip(RoundedCornerShape(2.dp)).background(if (selected) Color(0xFFFF4D63) else Color.Transparent))
+            Spacer(Modifier.width(9.dp))
             Text(symbol, color = if (selected || focused) Color(0xFFFF6576) else Color(0xFFA3A9B7),
                 fontSize = 19.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.width(12.dp))
@@ -1207,45 +1260,110 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private val thumbs = mutableStateMapOf<String, androidx.compose.ui.graphics.ImageBitmap>()
+
+    // İnmiş videodan gerçek bir kare çıkarıp küçük resim yapar (diske kaydeder).
+    private fun makeThumb(n: Node): androidx.compose.ui.graphics.ImageBitmap? {
+        val cf = File(File(cacheDir, "thumbs").apply { mkdirs() }, n.id + ".jpg")
+        if (cf.exists() && cf.length() > 0) return runCatching { BitmapFactory.decodeFile(cf.path)?.asImageBitmap() }.getOrNull()
+        val src = localFile(n.id)
+        if (!src.exists()) return null
+        val r = android.media.MediaMetadataRetriever()
+        return try {
+            r.setDataSource(src.path)
+            val bmp = r.getFrameAtTime(2_000_000L, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC) ?: r.getFrameAtTime(0L) ?: return null
+            val w = 640
+            val h = (w.toFloat() * bmp.height / bmp.width).toInt().coerceAtLeast(1)
+            val sc = Bitmap.createScaledBitmap(bmp, w, h, true)
+            runCatching { cf.outputStream().use { sc.compress(Bitmap.CompressFormat.JPEG, 82, it) } }
+            sc.asImageBitmap()
+        } catch (_: Throwable) { null } finally { runCatching { r.release() } }
+    }
+
+    private fun accentFor(id: String): Pair<Color, Color> {
+        val hue = ((id.hashCode() and 0x7fffffff) % 360).toFloat()
+        return Pair(Color.hsv(hue, 0.55f, 0.62f), Color.hsv((hue + 45f) % 360f, 0.75f, 0.22f))
+    }
+
+    @Composable
+    private fun Hero(n: Node, label: String) {
+        var focused by remember { mutableStateOf(false) }
+        val shape = RoundedCornerShape(22.dp)
+        val (c1, c2) = accentFor(n.id)
+        val thumb = thumbs[n.id]
+        LaunchedEffect(n.id, offlineReady[n.id]) {
+            if (thumbs[n.id] == null && isOfflineReady(n)) kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { makeThumb(n) }?.let { thumbs[n.id] = it }
+        }
+        Box(Modifier.fillMaxWidth().height(200.dp).clip(shape)
+            .background(Brush.linearGradient(listOf(Color(0xFFD72E49), Color(0xFF3A0E1C), c2)))) {
+            if (thumb != null) Image(bitmap = thumb, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+            Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(listOf(Color(0xEE0A0C14), Color(0x990A0C14), Color(0x110A0C14)))))
+            Column(Modifier.align(Alignment.CenterStart).padding(start = 30.dp, end = 30.dp).widthIn(max = 560.dp)) {
+                Text(label, color = Color(0xFFFF8896), fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
+                Spacer(Modifier.height(6.dp))
+                Text(n.name, color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 32.sp)
+                Spacer(Modifier.height(4.dp))
+                Text(if (isOfflineReady(n)) "TV'de kayıtlı · internetsiz oynar" else "Akışla oynatılır", color = Color(0xFFB9BECB), fontSize = 12.sp)
+                Spacer(Modifier.height(16.dp))
+                Row(Modifier.onFocusChanged { focused = it.hasFocus }.clip(RoundedCornerShape(30.dp))
+                    .background(if (focused) Color.White else Color(0x33FFFFFF))
+                    .border(2.dp, if (focused) Color.White else Color(0x55FFFFFF), RoundedCornerShape(30.dp))
+                    .focusable().clickable { open(n) }.padding(horizontal = 26.dp, vertical = 11.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Text("▶  Oynat", color = if (focused) Color(0xFF0A0C14) else Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+    }
+
     @Composable
     private fun Tile(n: Node, compact: Boolean, click: () -> Unit) {
         var focused by remember { mutableStateOf(false) }
         var lastLong by remember { mutableLongStateOf(0L) }
-        val shape = RoundedCornerShape(10.dp)
-        Row(
-            Modifier.fillMaxWidth().onFocusChanged { focused = it.isFocused; }
+        val scale by animateFloatAsState(if (focused) 1.07f else 1f, label = "tile")
+        val shape = RoundedCornerShape(18.dp)
+        val (c1, c2) = accentFor(n.id)
+        val isVideo = !n.folder && !n.pdf && !n.image
+        val thumb = thumbs[n.id]
+        LaunchedEffect(n.id, offlineReady[n.id]) {
+            if (isVideo && thumbs[n.id] == null && isOfflineReady(n)) kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { makeThumb(n) }?.let { thumbs[n.id] = it }
+        }
+        val glyph = if (n.folder) "▰" else if (n.pdf) "PDF" else if (n.image) "JPG" else "▶"
+        val kind = if (n.folder) "KLASÖR" else if (n.pdf) "PDF" else if (n.image) "GÖRSEL" else "VİDEO"
+        Box(
+            Modifier.fillMaxWidth().aspectRatio(16f / 10f)
+                .zIndex(if (focused) 1f else 0f)
+                .graphicsLayer { scaleX = scale; scaleY = scale }
+                .shadow(if (focused) 22.dp else 3.dp, shape, ambientColor = Color.Black, spotColor = if (focused) Color(0xFF7C9CFF) else Color.Black)
+                .onFocusChanged { focused = it.isFocused }
                 .onPreviewKeyEvent { ev ->
                     val k = ev.key
                     if (!n.pdf && !n.image && n.uri?.scheme != "content" && ev.type == KeyEventType.KeyDown && ev.nativeKeyEvent.isLongPress &&
                         (k == Key.DirectionCenter || k == Key.Enter || k == Key.NumPadEnter)) { lastLong = System.currentTimeMillis(); menuNode = n; true } else false
                 }
-                .background(if (focused) Color(0xFF303239) else Color(0xFF1C1E23), shape)
-                .border(if (focused) 2.dp else 1.dp, if (focused) Color.White else Color(0xFF303239), shape)
-                .clip(shape).focusable().clickable { if (System.currentTimeMillis() - lastLong > 1200) click() }.padding(10.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .clip(shape)
+                .background(if (n.folder) Brush.linearGradient(listOf(Color(0xFF3B4C7A), Color(0xFF1A2038))) else Brush.linearGradient(listOf(c1, c2)))
+                .border(if (focused) 3.dp else 1.dp, if (focused) Color.White else Color(0x22FFFFFF), shape)
+                .focusable().clickable { if (System.currentTimeMillis() - lastLong > 1200) click() }
         ) {
-            Box(Modifier.size(if (compact) 92.dp else 116.dp, if (compact) 58.dp else 72.dp)
-                .clip(RoundedCornerShape(6.dp))
-                .background(if (n.folder) Color(0xFF303A4A) else if (n.pdf) Color(0xFF493039) else Color(0xFF292D36)),
-                contentAlignment = Alignment.Center) {
-                Text(if (n.folder) "▰" else if (n.pdf) "PDF" else if (n.image) "JPG" else "▶",
-                    color = if (n.pdf || n.image) Color(0xFFFF9AA7) else Color.White,
-                    fontSize = if (n.pdf || n.image) 17.sp else 25.sp, fontWeight = FontWeight.Bold)
-                if (offlineReady[n.id] == true) Box(Modifier.align(Alignment.TopEnd).padding(4.dp).size(18.dp).clip(androidx.compose.foundation.shape.CircleShape).background(Color(0xFF2F8BFF)), contentAlignment = Alignment.Center) {
-                    Text("✓", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                }
+            if (thumb != null) Image(bitmap = thumb, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+            else Text(glyph, color = Color(0x55FFFFFF), fontSize = if (n.pdf || n.image) 38.sp else 56.sp, fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.Center))
+            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0.35f to Color.Transparent, 1f to Color(0xE6000000))))
+            if (thumb != null && isVideo && focused) Box(Modifier.align(Alignment.Center).size(54.dp).clip(androidx.compose.foundation.shape.CircleShape).background(Color(0x99000000)), contentAlignment = Alignment.Center) {
+                Text("▶", color = Color.White, fontSize = 22.sp)
             }
-            Spacer(Modifier.width(13.dp))
-            Column(Modifier.weight(1f)) {
-                Text(n.name, color = Color.White, fontSize = if (compact) 13.sp else 15.sp,
-                    fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Spacer(Modifier.height(5.dp))
-                Text(if (n.folder) "KLASÖR" else if (n.pdf) "PDF BELGESİ" else if (n.image) "GÖRSEL" else "VİDEO",
-                    color = Color(0xFF9B9EA7), fontSize = 9.sp, letterSpacing = 1.2.sp)
-                if (offlineReady[n.id] == true) Text("TV\'DE KAYITLI", color = Color(0xFF4DA3FF), fontSize = 9.sp, fontWeight = FontWeight.Bold)
-                else dlProgress[n.id]?.let { Text("İNDİRİLİYOR %$it", color = Color(0xFFFFD28A), fontSize = 9.sp, fontWeight = FontWeight.Bold) }
+            Text(kind, color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp,
+                modifier = Modifier.align(Alignment.TopStart).padding(10.dp).clip(RoundedCornerShape(6.dp)).background(Color(0x66000000)).padding(horizontal = 7.dp, vertical = 3.dp))
+            if (offlineReady[n.id] == true) Box(Modifier.align(Alignment.TopEnd).padding(10.dp).size(24.dp).clip(androidx.compose.foundation.shape.CircleShape).background(Color(0xFF2F8BFF)), contentAlignment = Alignment.Center) {
+                Text("✓", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+            } else dlProgress[n.id]?.let {
+                Text("%$it", color = Color(0xFFFFD28A), fontSize = 11.sp, fontWeight = FontWeight.Bold,
+                    modifier = Modifier.align(Alignment.TopEnd).padding(10.dp).clip(RoundedCornerShape(6.dp)).background(Color(0x99000000)).padding(horizontal = 7.dp, vertical = 3.dp))
             }
-            Text("›", color = if (focused) Color.White else Color(0xFF777B84), fontSize = 25.sp)
+            Column(Modifier.align(Alignment.BottomStart).padding(14.dp)) {
+                Text(n.name, color = Color.White, fontSize = if (compact) 13.sp else 15.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 18.sp)
+                if (offlineReady[n.id] == true) Text("TV'de kayıtlı", color = Color(0xFF7DB8FF), fontSize = 10.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 2.dp))
+            }
         }
     }
 

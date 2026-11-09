@@ -7,7 +7,9 @@
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
-    <application android:largeHeap="true" android:label="TCL Akademi" android:icon="@drawable/ic_launcher" android:banner="@drawable/tv_banner" android:theme="@android:style/Theme.Material.NoActionBar">
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+    <application android:largeHeap="true" android:requestLegacyExternalStorage="true" android:label="TCL Akademi" android:icon="@drawable/ic_launcher" android:banner="@drawable/tv_banner" android:theme="@android:style/Theme.Material.NoActionBar">
         <provider android:name="androidx.core.content.FileProvider" android:authorities="${applicationId}.fileprovider" android:exported="false" android:grantUriPermissions="true">
             <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/file_paths" />
         </provider>
