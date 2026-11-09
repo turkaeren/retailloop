@@ -129,6 +129,7 @@ class MainActivity : ComponentActivity() {
                 val reason = error.cause?.message ?: error.message ?: "Bilinmeyen oynatma hatası"
                 playerError = "Video açılamadı: ${error.errorCodeName}. $reason"
                 playing = false
+                overlay = true
             }
         })
         applyLoop()
