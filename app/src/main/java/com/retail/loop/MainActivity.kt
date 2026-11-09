@@ -756,7 +756,29 @@ class MainActivity : ComponentActivity() {
     }
 
     // Public Google Drive folders can be read from Drive's embedded folder view without an API key.
-    private fun parse(html: String): List<Node> {
+    private fun parse(html: String): List<Node> = parseBlocks(html).ifEmpty { parseLegacy(html) }
+
+    private fun parseLegacy(html: String): List<Node> {
+        val result = mutableListOf<Node>()
+        val itemRegex = Regex("""(?is)<a[^>]+href="([^"]+)"[^>]*>.*?class="flip-entry-title"[^>]*>(.*?)</div>""")
+        val idRegex = Regex("""/(?:file/d|drive/folders)/([A-Za-z0-9_-]+)|[?&]id=([A-Za-z0-9_-]+)""")
+        for (m in itemRegex.findAll(html)) {
+            val link = Html.fromHtml(m.groupValues[1], Html.FROM_HTML_MODE_LEGACY).toString()
+            val name = Html.fromHtml(m.groupValues[2], Html.FROM_HTML_MODE_LEGACY).toString().trim()
+            val idMatch = idRegex.find(link) ?: continue
+            val id = idMatch.groupValues.drop(1).firstOrNull { it.isNotBlank() } ?: continue
+            if (name.isBlank()) continue
+            val folder = link.contains("/folders/")
+            val lowerName = name.lowercase()
+            val isPdf = lowerName.endsWith(".pdf")
+            val isImage = listOf(".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp").any { lowerName.endsWith(it) }
+            val uri = if (folder) null else Uri.parse("https://drive.usercontent.google.com/download?id=" + id + "&export=download&confirm=t")
+            if (result.none { it.id == id }) result += Node(id, clean(name), folder, uri, isPdf, isImage)
+        }
+        return result
+    }
+
+    private fun parseBlocks(html: String): List<Node> {
         val result = mutableListOf<Node>()
         val idRegex = Regex("""/(?:file/d|drive/folders)/([A-Za-z0-9_-]+)|[?&]id=([A-Za-z0-9_-]+)""")
         val titleRegex = Regex("""(?is)class="flip-entry-title"[^>]*>(.*?)</div>""")
