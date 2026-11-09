@@ -1,9 +1,11 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
 }
-val gdProps = java.util.Properties().apply {
+val gdProps = Properties().apply {
     val f = file("gdrive.properties")
     if (f.exists()) f.inputStream().use { load(it) }
 }
