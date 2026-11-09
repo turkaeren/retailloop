@@ -129,6 +129,13 @@ class MainActivity : ComponentActivity() {
     private var pdfRenderer: PdfRenderer? = null
     private var pdfDescriptor: ParcelFileDescriptor? = null
     private var viewerLoadToken = 0
+    private var kiosk by mutableStateOf(false)
+    private var pendingPlayId: String? = null
+    private val warmHandler = Handler(Looper.getMainLooper())
+    private val warmExec = java.util.concurrent.Executors.newSingleThreadExecutor()
+    @Volatile private var warmWriter: CacheWriter? = null
+    @Volatile private var warmGen = 0
+    private var warmTask: Runnable? = null
 
     private val mountReceiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context?, i: Intent?) { window.decorView.postDelayed({ if (stack.last().first == "usb") load() }, 2500) }
@@ -139,6 +146,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(s)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         loopMode = prefs.getInt("loop", 1)
+        kiosk = prefs.getBoolean("kiosk", false)
         val httpFactory = DefaultHttpDataSource.Factory()
             .setUserAgent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/128.0.0.0 Safari/537.36")
             .setAllowCrossProtocolRedirects(true)
@@ -148,15 +156,17 @@ class MainActivity : ComponentActivity() {
         val upstream = DefaultDataSource.Factory(this, httpFactory)
         val freeBytes = filesDir.usableSpace.coerceAtLeast(256L * 1024 * 1024)
         val cacheLimit = minOf(24L * 1024 * 1024 * 1024, (freeBytes * 0.60).toLong()).coerceAtLeast(256L * 1024 * 1024)
-        simpleCache = SimpleCache(File(cacheDir, "retail_media_cache"), LeastRecentlyUsedCacheEvictor(cacheLimit), StandaloneDatabaseProvider(this))
+        simpleCache = SimpleCache(File(filesDir, "retail_media_cache"), LeastRecentlyUsedCacheEvictor(cacheLimit), StandaloneDatabaseProvider(this))
         cacheFactory = CacheDataSource.Factory().setCache(simpleCache).setUpstreamDataSourceFactory(upstream)
             .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
             .setCacheKeyFactory { spec -> spec.uri.getQueryParameter("id") ?: spec.key ?: spec.uri.toString() }
+        val memMb = (getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager).memoryClass
+        val bufMb = (memMb / 3).coerceIn(32, 96)
         val lc = DefaultLoadControl.Builder()
             .setBufferDurationsMs(20000, 90000, 2500, 6000)
-            .setTargetBufferBytes(160 * 1024 * 1024)
+            .setTargetBufferBytes(bufMb * 1024 * 1024)
             .setPrioritizeTimeOverSizeThresholds(true).build()
-        val rf = DefaultRenderersFactory(this).setEnableDecoderFallback(true)
+        val rf = DefaultRenderersFactory(this).setEnableDecoderFallback(true).forceEnableMediaCodecAsynchronousQueueing()
         val sourceFactory = DefaultMediaSourceFactory(cacheFactory)
             .setLoadErrorHandlingPolicy(androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy(10))
         player = ExoPlayer.Builder(this, rf).setLoadControl(lc).setMediaSourceFactory(sourceFactory)
@@ -213,7 +223,7 @@ class MainActivity : ComponentActivity() {
         }
         setContent { Ui() }
         perm.launch(if (Build.VERSION.SDK_INT >= 33) arrayOf(Manifest.permission.READ_MEDIA_VIDEO, Manifest.permission.READ_MEDIA_IMAGES) else arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE))
-        load()
+        if (kiosk && prefs.getString("last_id", null) != null) resumeLast() else load()
     }
 
     override fun onDestroy() {
@@ -234,13 +244,64 @@ class MainActivity : ComponentActivity() {
         val length = simpleCache.getContentMetadata(key).get(androidx.media3.datasource.cache.ContentMetadata.KEY_CONTENT_LENGTH, -1L)
         return length > 0L && simpleCache.isCached(key, 0L, length)
     }
+    // Kartın üstüne gelince videonun ilk 6 MB'ını önceden indir: açılış hızlanır.
+    private fun warmUp(n: Node) {
+        val uri = n.uri ?: return
+        if (n.folder || n.pdf || n.image || uri.scheme != "https" || playbackActive || offlineReady[n.id] == true) return
+        warmTask?.let { warmHandler.removeCallbacks(it) }
+        runCatching { warmWriter?.cancel() }
+        val g = ++warmGen
+        val t = Runnable {
+            warmExec.execute {
+                if (g != warmGen || playbackActive) return@execute
+                try {
+                    val spec = DataSpec.Builder().setUri(uri).setKey(cacheKey(uri)).setLength(6L * 1024 * 1024).build()
+                    val w = CacheWriter(cacheFactory.createDataSource(), spec, null, null)
+                    warmWriter = w
+                    w.cache()
+                } catch (_: Exception) {
+                } finally { warmWriter = null }
+            }
+        }
+        warmTask = t
+        warmHandler.postDelayed(t, 600)
+    }
+
+    // Çevrimdışı hazır durumunu arka planda hesapla; liste çizilirken önbelleğe dokunma.
+    private fun refreshOffline() {
+        val list = nodes.filter { !it.folder && !it.pdf && !it.image && it.uri?.scheme == "https" }
+        if (list.isEmpty()) return
+        Thread {
+            val r = list.map { it.id to isOfflineReady(it) }
+            runOnUiThread { r.forEach { (k, v) -> offlineReady[k] = v } }
+        }.apply { isDaemon = true; start() }
+    }
+
+    private fun resumeLast() {
+        val vid = prefs.getString("last_id", null) ?: return
+        val folder = prefs.getString("last_folder", Config.FOLDER_ID) ?: Config.FOLDER_ID
+        val fname = prefs.getString("last_folder_name", Config.ROOT_TITLE) ?: Config.ROOT_TITLE
+        stack.clear()
+        stack.add(Pair(Config.FOLDER_ID, Config.ROOT_TITLE))
+        if (folder != Config.FOLDER_ID) stack.add(Pair(folder, fname))
+        pendingPlayId = vid
+        load()
+    }
+
+    private fun tryPending() {
+        val pid = pendingPlayId ?: return
+        nodes.firstOrNull { it.id == pid }?.let { pendingPlayId = null; open(it) }
+    }
+
     @Volatile private var prefetchGen = 0
     @Volatile private var prefetchWriter: CacheWriter? = null
 
     // Oynatma başlayınca arka plan indirmesini hemen kes: tüm bant genişliği oynayan videoya kalsın.
     private fun stopPrefetch() {
         prefetchGen++
+        warmGen++
         runCatching { prefetchWriter?.cancel() }
+        runCatching { warmWriter?.cancel() }
         prefetchWriter = null
     }
 
@@ -328,13 +389,15 @@ class MainActivity : ComponentActivity() {
                 while (c.moveToNext()) l += Node("img_" + c.getLong(0), clean(c.getString(1)), false, Uri.withAppendedPath(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, c.getLong(0).toString()), image = true)
             }
             nodes.clear(); nodes.addAll(l); message = if (l.isEmpty()) "Medya bulunamadı. Flash belleği takın." else ""
+            tryPending()
             return
         }
         fun show(txt: String) {
             nodes.clear()
             nodes.addAll(parse(txt))
             message = if (nodes.isEmpty()) "Klasör listelenemedi veya boş. Drive paylaşımını herkes görüntüleyebilir olarak kontrol edin." else ""
-            if (nodes.isNotEmpty()) startFolderPrefetch()
+            if (nodes.isNotEmpty()) { startFolderPrefetch(); refreshOffline() }
+            tryPending()
         }
         prefs.getString("f_$id", null)?.let { runCatching { show(it) } }
         loading = true
@@ -370,6 +433,7 @@ class MainActivity : ComponentActivity() {
         val v = nodes.filter { !it.folder && !it.pdf && !it.image }
         playlist.clear(); playlist.addAll(v)
         val i = v.indexOf(n).coerceAtLeast(0)
+        prefs.edit().putString("last_id", n.id).putString("last_folder", stack.last().first).putString("last_folder_name", stack.last().second).apply()
         val sourceFactory = DefaultMediaSourceFactory(cacheFactory)
         val localFactory = DefaultMediaSourceFactory(DefaultDataSource.Factory(this))
         val mediaSources = v.map { node ->
@@ -671,10 +735,15 @@ class MainActivity : ComponentActivity() {
                         stack.add(Pair("usb", "USB / Depolama"))
                         load()
                     }
+                    SidebarItem(if (kiosk) "Kiosk: açık" else "Kiosk: kapalı", "⟳", kiosk, compact) {
+                        kiosk = !kiosk
+                        prefs.edit().putBoolean("kiosk", kiosk).apply()
+                    }
                     Spacer(Modifier.weight(1f))
                     Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 10.dp)) {
                         Text(if (loading) "İÇERİKLER YÜKLENİYOR" else "KÜTÜPHANE HAZIR",
                             color = Color(0xFF858B9A), fontSize = 9.sp, letterSpacing = 1.1.sp)
+                        if (kiosk) Text("Açılışta son videodan devam eder", color = Color(0xFF747B8C), fontSize = 9.sp, modifier = Modifier.padding(bottom = 5.dp))
                         Text(videos.size.toString() + " video · " + pdfs.size + " PDF · " + images.size + " görsel",
                             color = Color(0xFFB7BBC5), fontSize = 11.sp, modifier = Modifier.padding(top = 5.dp))
                     }
@@ -729,7 +798,7 @@ class MainActivity : ComponentActivity() {
                             verticalArrangement = Arrangement.spacedBy(14.dp),
                             contentPadding = PaddingValues(bottom = 24.dp, end = 4.dp)
                         ) {
-                            items(visible) { n -> Tile(n, compact) { open(n) } }
+                            items(visible, key = { it.id }) { n -> Tile(n, compact) { open(n) } }
                         }
                     }
                 }
@@ -766,7 +835,7 @@ class MainActivity : ComponentActivity() {
         var focused by remember { mutableStateOf(false) }
         val shape = RoundedCornerShape(10.dp)
         Row(
-            Modifier.fillMaxWidth().onFocusChanged { focused = it.isFocused }
+            Modifier.fillMaxWidth().onFocusChanged { focused = it.isFocused; if (it.isFocused) warmUp(n) }
                 .background(if (focused) Color(0xFF303239) else Color(0xFF1C1E23), shape)
                 .border(if (focused) 2.dp else 1.dp, if (focused) Color.White else Color(0xFF303239), shape)
                 .clip(shape).focusable().clickable { click() }.padding(10.dp),
@@ -787,7 +856,7 @@ class MainActivity : ComponentActivity() {
                 Spacer(Modifier.height(5.dp))
                 Text(if (n.folder) "KLASÖR" else if (n.pdf) "PDF BELGESİ" else if (n.image) "GÖRSEL" else "VİDEO",
                     color = Color(0xFF9B9EA7), fontSize = 9.sp, letterSpacing = 1.2.sp)
-                if (isOfflineReady(n)) Text("ÇEVRİMDIŞI HAZIR", color = Color(0xFF7EE0B0), fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                if (offlineReady[n.id] == true) Text("ÇEVRİMDIŞI HAZIR", color = Color(0xFF7EE0B0), fontSize = 9.sp, fontWeight = FontWeight.Bold)
             }
             Text("›", color = if (focused) Color.White else Color(0xFF777B84), fontSize = 25.sp)
         }
