@@ -331,76 +331,146 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun Browser() {
-        var category by remember { mutableStateOf("Tümü") }
-        BoxWithConstraints(Modifier.fillMaxSize().background(Color(0xFF101114))) {
+        var section by remember { mutableStateOf("Genel Bakış") }
+        BoxWithConstraints(Modifier.fillMaxSize().background(Color(0xFF0D0F14))) {
             val compact = maxWidth < 760.dp
-            val horizontal = if (compact) 18.dp else 42.dp
+            val navWidth = if (compact) 176.dp else 236.dp
             val videos = nodes.filter { !it.folder && !it.pdf }
             val folders = nodes.filter { it.folder }
             val pdfs = nodes.filter { it.pdf }
-            val visible = when (category) {
+            val visible = when (section) {
                 "Videolar" -> videos
                 "Klasörler" -> folders
-                "PDF'ler" -> pdfs
+                "PDF Belgeleri" -> pdfs
                 else -> nodes
             }
-            Column(Modifier.fillMaxSize().padding(horizontal = horizontal, vertical = if (compact) 14.dp else 26.dp)) {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    BrandMark(42.dp)
-                    Spacer(Modifier.width(12.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text("TCL Akademi", color = Color.White, fontSize = if (compact) 20.sp else 25.sp, fontWeight = FontWeight.Bold)
-                        Text("MEDYA KÜTÜPHANESİ", color = Color(0xFF92959D), fontSize = 9.sp, letterSpacing = 2.sp)
-                    }
-                    Text(if (loading) "Yükleniyor…" else videos.size.toString() + " video", color = Color(0xFFB8BBC3), fontSize = 12.sp)
-                }
-                if (stack.size > 1) {
-                    Spacer(Modifier.height(18.dp))
+            Row(Modifier.fillMaxSize()) {
+                Column(
+                    Modifier.width(navWidth).fillMaxHeight()
+                        .background(Color(0xFF151820))
+                        .padding(horizontal = if (compact) 14.dp else 20.dp, vertical = 24.dp)
+                ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        PlayerChip("‹ Geri", false) { up() }
-                        Spacer(Modifier.width(12.dp))
-                        Text(stack.joinToString("  /  ") { it.second }, color = Color(0xFF9A9DA5), fontSize = 12.sp,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                }
-                Spacer(Modifier.height(if (compact) 18.dp else 26.dp))
-                Text(if (stack.size == 1) "Kütüphane" else stack.last().second,
-                    color = Color.White, fontSize = if (compact) 25.sp else 31.sp, fontWeight = FontWeight.Bold)
-                Text("İzlemek istediğin içeriği seç.", color = Color(0xFF92959D), fontSize = 13.sp,
-                    modifier = Modifier.padding(top = 4.dp, bottom = 16.dp))
-                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf("Tümü", "Videolar", "Klasörler", "PDF'ler").forEach { item ->
-                        Box(Modifier.clip(RoundedCornerShape(8.dp))
-                            .background(if (category == item) Color(0xFFE5394F) else Color(0xFF24262B))
-                            .focusable().clickable { category = item }
-                            .padding(horizontal = 16.dp, vertical = 10.dp)) {
-                            Text(item, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        BrandMark(if (compact) 38.dp else 46.dp)
+                        Spacer(Modifier.width(10.dp))
+                        Column {
+                            Text("TCL Akademi", color = Color.White, fontSize = if (compact) 15.sp else 18.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                            Text("MEDIA CENTER", color = Color(0xFF858B9A), fontSize = 8.sp, letterSpacing = 1.4.sp)
                         }
                     }
+                    Spacer(Modifier.height(34.dp))
+                    Text("KÜTÜPHANE", color = Color(0xFF747B8C), fontSize = 9.sp, letterSpacing = 1.7.sp,
+                        modifier = Modifier.padding(start = 10.dp, bottom = 10.dp))
+                    SidebarItem("Genel Bakış", "⌂", section == "Genel Bakış", compact) {
+                        section = "Genel Bakış"
+                        if (stack.last().first != Config.FOLDER_ID) { stack.clear(); stack.add(Pair(Config.FOLDER_ID, Config.ROOT_TITLE)); load() }
+                    }
+                    SidebarItem("Videolar", "▶", section == "Videolar", compact) {
+                        section = "Videolar"
+                        if (stack.last().first != Config.FOLDER_ID) { stack.clear(); stack.add(Pair(Config.FOLDER_ID, Config.ROOT_TITLE)); load() }
+                    }
+                    SidebarItem("Klasörler", "▰", section == "Klasörler", compact) {
+                        section = "Klasörler"
+                        if (stack.last().first != Config.FOLDER_ID) { stack.clear(); stack.add(Pair(Config.FOLDER_ID, Config.ROOT_TITLE)); load() }
+                    }
+                    SidebarItem("PDF Belgeleri", "▤", section == "PDF Belgeleri", compact) {
+                        section = "PDF Belgeleri"
+                        if (stack.last().first != Config.FOLDER_ID) { stack.clear(); stack.add(Pair(Config.FOLDER_ID, Config.ROOT_TITLE)); load() }
+                    }
+                    Spacer(Modifier.height(22.dp))
+                    Text("DEPOLAMA", color = Color(0xFF747B8C), fontSize = 9.sp, letterSpacing = 1.7.sp,
+                        modifier = Modifier.padding(start = 10.dp, bottom = 10.dp))
+                    SidebarItem("USB / Depolama", "▣", stack.last().first == "usb", compact) {
+                        section = "USB / Depolama"
+                        stack.clear()
+                        stack.add(Pair("usb", "USB / Depolama"))
+                        load()
+                    }
+                    Spacer(Modifier.weight(1f))
+                    Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 10.dp)) {
+                        Text(if (loading) "İÇERİKLER YÜKLENİYOR" else "KÜTÜPHANE HAZIR",
+                            color = Color(0xFF858B9A), fontSize = 9.sp, letterSpacing = 1.1.sp)
+                        Text(videos.size.toString() + " video  ·  " + folders.size.toString() + " klasör",
+                            color = Color(0xFFB7BBC5), fontSize = 11.sp, modifier = Modifier.padding(top = 5.dp))
+                    }
                 }
-                Spacer(Modifier.height(16.dp))
-                if (visible.isEmpty()) {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(if (loading) "İçerikler yükleniyor…" else "İçerik bulunamadı",
-                                color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
-                            if (message.isNotBlank()) Text(message, color = Color(0xFF92959D), fontSize = 12.sp,
-                                textAlign = TextAlign.Center, modifier = Modifier.padding(top = 8.dp))
+                Box(Modifier.width(1.dp).fillMaxHeight().background(Color(0xFF252936)))
+                Column(Modifier.weight(1f).fillMaxHeight().padding(
+                    start = if (compact) 22.dp else 42.dp,
+                    end = if (compact) 22.dp else 42.dp,
+                    top = if (compact) 22.dp else 34.dp,
+                    bottom = 20.dp
+                )) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(if (stack.size > 1) stack.last().second else section,
+                                color = Color.White, fontSize = if (compact) 24.sp else 32.sp, fontWeight = FontWeight.Bold)
+                            Text(
+                                when (section) {
+                                    "Videolar" -> "İzlemeye hazır videolar"
+                                    "Klasörler" -> "Eğitim içeriklerinin klasörleri"
+                                    "PDF Belgeleri" -> "Dokümanlar ve eğitim materyalleri"
+                                    "USB / Depolama" -> "Bağlı harici depolama"
+                                    else -> "İçeriklerini tek ekrandan yönet"
+                                },
+                                color = Color(0xFF9298A7), fontSize = if (compact) 11.sp else 13.sp,
+                                modifier = Modifier.padding(top = 5.dp)
+                            )
+                        }
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text(if (loading) "YÜKLENİYOR" else visible.size.toString() + " ÖĞE",
+                                color = Color(0xFFB7BBC5), fontSize = 10.sp, letterSpacing = 1.1.sp)
+                            if (stack.size > 1 && stack.last().first != "usb") {
+                                PlayerChip("‹ Üst klasör", false) { up() }
+                            }
                         }
                     }
-                } else {
-                    LazyVerticalGrid(
-                        columns = GridCells.Adaptive(if (compact) 320.dp else 390.dp),
-                        modifier = Modifier.fillMaxSize(),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
-                        contentPadding = PaddingValues(bottom = 20.dp)
-                    ) {
-                        items(visible) { n -> Tile(n, compact) { open(n) } }
+                    Spacer(Modifier.height(if (compact) 20.dp else 28.dp))
+                    if (visible.isEmpty()) {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text(if (loading) "İçerikler yükleniyor…" else "Burada henüz içerik yok",
+                                    color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.SemiBold)
+                                if (message.isNotBlank()) Text(message, color = Color(0xFF9298A7), fontSize = 12.sp,
+                                    textAlign = TextAlign.Center, modifier = Modifier.padding(top = 10.dp).widthIn(max = 440.dp))
+                            }
+                        }
+                    } else {
+                        LazyVerticalGrid(
+                            columns = GridCells.Adaptive(if (compact) 280.dp else 340.dp),
+                            modifier = Modifier.fillMaxSize(),
+                            horizontalArrangement = Arrangement.spacedBy(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(14.dp),
+                            contentPadding = PaddingValues(bottom = 24.dp, end = 4.dp)
+                        ) {
+                            items(visible) { n -> Tile(n, compact) { open(n) } }
+                        }
                     }
                 }
             }
+        }
+    }
+
+    @Composable
+    private fun SidebarItem(label: String, symbol: String, selected: Boolean, compact: Boolean, click: () -> Unit) {
+        var focused by remember { mutableStateOf(false) }
+        val shape = RoundedCornerShape(10.dp)
+        Row(
+            Modifier.fillMaxWidth().padding(vertical = 3.dp)
+                .onFocusChanged { focused = it.isFocused }
+                .clip(shape)
+                .background(when { focused -> Color(0xFF343B4A); selected -> Color(0xFF292F3D); else -> Color.Transparent })
+                .border(if (focused) 2.dp else 1.dp, if (focused) Color.White else if (selected) Color(0xFF41495B) else Color.Transparent, shape)
+                .focusable().clickable { click() }
+                .padding(horizontal = if (compact) 10.dp else 14.dp, vertical = if (compact) 12.dp else 14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(symbol, color = if (selected || focused) Color(0xFFFF6576) else Color(0xFFA3A9B7),
+                fontSize = 19.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.width(12.dp))
+            Text(label, color = if (selected || focused) Color.White else Color(0xFFB5BAC6),
+                fontSize = if (compact) 11.sp else 13.sp, fontWeight = if (selected || focused) FontWeight.SemiBold else FontWeight.Medium,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 
