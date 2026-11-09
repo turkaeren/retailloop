@@ -264,22 +264,24 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun BrandMark(size: androidx.compose.ui.unit.Dp) {
-        Box(Modifier.size(size).clip(RoundedCornerShape(12.dp))
+    private fun BrandMark(dimension: androidx.compose.ui.unit.Dp) {
+        Box(Modifier.size(dimension).clip(RoundedCornerShape(12.dp))
             .background(Brush.linearGradient(listOf(Color(0xFFFF5264), Color(0xFFB91F3B)))),
             contentAlignment = Alignment.Center) {
-            Canvas(Modifier.fillMaxSize().padding(size * 0.19f)) {
-                drawRoundRect(Color.White.copy(alpha = 0.96f), topLeft = Offset(size.width * 0.05f, size.height * 0.12f),
-                    size = Size(size.width * 0.9f, size.height * 0.68f), cornerRadius = CornerRadius(size.width * 0.12f))
+            Canvas(Modifier.fillMaxSize().padding(dimension * 0.19f)) {
+                val w = this.size.width
+                val h = this.size.height
+                drawRoundRect(Color.White.copy(alpha = 0.96f), topLeft = Offset(w * 0.05f, h * 0.12f),
+                    size = Size(w * 0.9f, h * 0.68f), cornerRadius = CornerRadius(w * 0.12f))
                 val p = Path().apply {
-                    moveTo(size.width * 0.42f, size.height * 0.25f)
-                    lineTo(size.width * 0.42f, size.height * 0.67f)
-                    lineTo(size.width * 0.72f, size.height * 0.46f)
+                    moveTo(w * 0.42f, h * 0.25f)
+                    lineTo(w * 0.42f, h * 0.67f)
+                    lineTo(w * 0.72f, h * 0.46f)
                     close()
                 }
                 drawPath(p, Color(0xFFD72E49))
-                drawLine(Color.White, Offset(size.width * 0.32f, size.height * 0.03f), Offset(size.width * 0.2f, 0f), strokeWidth = size.width * 0.055f)
-                drawLine(Color.White, Offset(size.width * 0.68f, size.height * 0.03f), Offset(size.width * 0.8f, 0f), strokeWidth = size.width * 0.055f)
+                drawLine(Color.White, Offset(w * 0.32f, h * 0.03f), Offset(w * 0.2f, 0f), strokeWidth = w * 0.055f)
+                drawLine(Color.White, Offset(w * 0.68f, h * 0.03f), Offset(w * 0.8f, 0f), strokeWidth = w * 0.055f)
             }
         }
     }
