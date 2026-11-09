@@ -56,6 +56,12 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.Player
@@ -147,7 +153,7 @@ class MainActivity : ComponentActivity() {
             .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
             .setCacheKeyFactory { spec -> spec.uri.getQueryParameter("id") ?: spec.key ?: spec.uri.toString() }
         val lc = DefaultLoadControl.Builder()
-            .setBufferDurationsMs(30000, 120000, 6000, 15000)
+            .setBufferDurationsMs(20000, 90000, 2500, 6000)
             .setTargetBufferBytes(160 * 1024 * 1024)
             .setPrioritizeTimeOverSizeThresholds(true).build()
         val rf = DefaultRenderersFactory(this).setEnableDecoderFallback(true)
@@ -212,6 +218,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         prefetchCancelled = true
+        stopPrefetch()
         retryHandler.removeCallbacksAndMessages(null)
         runCatching { unregisterReceiver(mountReceiver) }
         closeDocument()
@@ -227,42 +234,53 @@ class MainActivity : ComponentActivity() {
         val length = simpleCache.getContentMetadata(key).get(androidx.media3.datasource.cache.ContentMetadata.KEY_CONTENT_LENGTH, -1L)
         return length > 0L && simpleCache.isCached(key, 0L, length)
     }
+    @Volatile private var prefetchGen = 0
+    @Volatile private var prefetchWriter: CacheWriter? = null
+
+    // Oynatma başlayınca arka plan indirmesini hemen kes: tüm bant genişliği oynayan videoya kalsın.
+    private fun stopPrefetch() {
+        prefetchGen++
+        runCatching { prefetchWriter?.cancel() }
+        prefetchWriter = null
+    }
+
     private fun startFolderPrefetch() {
-        if (!::simpleCache.isInitialized) return
-        prefetchCancelled = false
-        prefetchThread?.interrupt()
+        if (!::simpleCache.isInitialized || playbackActive) return
+        stopPrefetch()
+        val gen = prefetchGen
         val candidates = nodes.filter { !it.folder && !it.pdf && !it.image && it.uri?.scheme == "https" }
         if (candidates.isEmpty()) { downloadStatus = "İndirilecek video yok"; return }
-        prefetchThread = Thread {
+        Thread {
             var done = 0
             runOnUiThread { downloadStatus = "Çevrimdışı hazırlık başlıyor…" }
             for (node in candidates) {
-                if (prefetchCancelled || Thread.currentThread().isInterrupted) break
-                while (playbackActive && !prefetchCancelled) {
-                    try { Thread.sleep(500) } catch (_: InterruptedException) { return@Thread }
-                }
-                if (prefetchCancelled) break
+                if (gen != prefetchGen) return@Thread
                 val uri = node.uri ?: continue
                 val key = cacheKey(uri)
                 if (isOfflineReady(node)) { done++; continue }
                 try {
                     val spec = DataSpec.Builder().setUri(uri).setKey(key).build()
-                    CacheWriter(cacheFactory.createDataSource(), spec, null, null).cache()
+                    val writer = CacheWriter(cacheFactory.createDataSource(), spec, null, null)
+                    prefetchWriter = writer
+                    writer.cache()
                     done++
-                    runOnUiThread {
+                    if (gen == prefetchGen) runOnUiThread {
                         offlineReady[node.id] = isOfflineReady(node)
                         downloadStatus = "Çevrimdışı hazırlanıyor: $done/${candidates.size}"
                     }
                 } catch (_: Exception) {
+                    if (gen != prefetchGen) return@Thread
                     runOnUiThread { downloadStatus = "İndirme durakladı: ${node.name}" }
+                } finally {
+                    prefetchWriter = null
                 }
                 val maxBytes = minOf(24L * 1024 * 1024 * 1024, (filesDir.usableSpace.coerceAtLeast(256L * 1024 * 1024) * 0.60).toLong())
                 if (simpleCache.cacheSpace >= (maxBytes * 0.90).toLong()) break
             }
-            runOnUiThread {
+            if (gen == prefetchGen) runOnUiThread {
                 offlineReady.clear()
                 candidates.forEach { offlineReady[it.id] = isOfflineReady(it) }
-                downloadStatus = if (prefetchCancelled) "İndirme durduruldu" else "Çevrimdışı hazırlık tamamlandı"
+                downloadStatus = "Çevrimdışı hazırlık tamamlandı"
             }
         }.apply { name = "RetailLoop-CachePrefetch"; isDaemon = true; start() }
     }
@@ -359,6 +377,7 @@ class MainActivity : ComponentActivity() {
             if (node.uri?.scheme == "content") localFactory.createMediaSource(item) else sourceFactory.createMediaSource(item)
         }
         player.setMediaSources(mediaSources, i, 0L)
+        stopPrefetch()
         playbackActive = true
         prefetchCancelled = false
         retryCount = 0
@@ -447,6 +466,7 @@ class MainActivity : ComponentActivity() {
         playing = false; playbackActive = false; playerOpen = false; overlay = false
         playerError = ""; playerStatus = ""; retryCount = 0
         if (fullscreen) applyFullscreen(false)
+        startFolderPrefetch()
     }
     private fun applyFullscreen(enabled: Boolean) {
         fullscreen = enabled
@@ -523,8 +543,10 @@ class MainActivity : ComponentActivity() {
                 KeyEvent.KEYCODE_MEDIA_PAUSE -> { player.pause(); overlay = true; playerUiActivity++; return true }
                 KeyEvent.KEYCODE_MEDIA_NEXT -> { if (current < playlist.lastIndex) play(current + 1); overlay = true; playerUiActivity++; return true }
                 KeyEvent.KEYCODE_MEDIA_PREVIOUS -> { if (current > 0) play(current - 1); overlay = true; playerUiActivity++; return true }
-                KeyEvent.KEYCODE_MEDIA_FAST_FORWARD, KeyEvent.KEYCODE_DPAD_RIGHT -> { seekBy(10000); overlay = true; playerUiActivity++; return true }
-                KeyEvent.KEYCODE_MEDIA_REWIND, KeyEvent.KEYCODE_DPAD_LEFT -> { seekBy(-10000); overlay = true; playerUiActivity++; return true }
+                KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> { seekBy(10000); overlay = true; playerUiActivity++; return true }
+                KeyEvent.KEYCODE_DPAD_RIGHT -> if (!overlay) { seekBy(10000); overlay = true; playerUiActivity++; return true }
+                KeyEvent.KEYCODE_MEDIA_REWIND -> { seekBy(-10000); overlay = true; playerUiActivity++; return true }
+                KeyEvent.KEYCODE_DPAD_LEFT -> if (!overlay) { seekBy(-10000); overlay = true; playerUiActivity++; return true }
                 KeyEvent.KEYCODE_MEDIA_STOP -> { stopPlay(); return true }
             }
             if (overlay) playerUiActivity++
@@ -786,6 +808,8 @@ class MainActivity : ComponentActivity() {
         var tick by remember { mutableIntStateOf(0) }
         var isSeeking by remember { mutableStateOf(false) }
         var settingsMenu by remember { mutableStateOf(false) }
+        val playRequester = remember { FocusRequester() }
+        LaunchedEffect(overlay) { if (overlay) { delay(80); runCatching { playRequester.requestFocus() } } }
         LaunchedEffect(playing) {
             while (playing) {
                 if (!isSeeking) playPosition = player.currentPosition.coerceAtLeast(0L)
@@ -816,32 +840,30 @@ class MainActivity : ComponentActivity() {
             Box(Modifier.fillMaxSize().pointerInput(overlay) {
                 detectTapGestures(onTap = { overlay = !overlay; tick++ })
             })
+            val slim = maxHeight < 520.dp
             AnimatedVisibility(overlay, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.BottomCenter)) {
                 Column(
                     Modifier.fillMaxWidth()
-                        .background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xE8090B11), Color(0xF5090B11))))
-                        .padding(start = side, end = side, top = if (compact) 10.dp else 14.dp, bottom = if (compact) 8.dp else 12.dp)
+                        .background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xD0090B11))))
+                        .padding(start = side, end = side, top = if (slim) 14.dp else 22.dp, bottom = if (slim) 4.dp else 10.dp)
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(playlist.getOrNull(current)?.name ?: "", color = Color.White,
-                            fontSize = if (compact) 13.sp else 17.sp, fontWeight = FontWeight.SemiBold,
+                            fontSize = if (slim) 11.sp else 14.sp, fontWeight = FontWeight.SemiBold,
                             maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                         Text("${formatTime(playPosition)} / ${formatTime(playDuration)}",
-                            color = Color(0xFFBFC5D4), fontSize = if (compact) 10.sp else 12.sp)
+                            color = Color(0xFFBFC5D4), fontSize = if (slim) 9.sp else 11.sp)
                     }
-                    Slider(
-                        value = if (playDuration > 0) playPosition.coerceIn(0L, playDuration).toFloat() else 0f,
-                        onValueChange = { isSeeking = true; playPosition = it.toLong(); overlay = true },
-                        onValueChangeFinished = { seekToPosition(playPosition.coerceIn(0L, playDuration)); isSeeking = false; tick++ },
-                        valueRange = 0f..playDuration.coerceAtLeast(1L).toFloat(),
-                        enabled = playDuration > 0L,
-                        modifier = Modifier.fillMaxWidth().height(22.dp)
+                    SeekBar(
+                        pos = playPosition, dur = playDuration,
+                        onSeek = { seekToPosition(it); playPosition = it; overlay = true; tick++ },
+                        onStep = { seekBy(it); playPosition = player.currentPosition.coerceAtLeast(0L); overlay = true; tick++ }
                     )
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
                         if (playerError.isNotBlank()) PlayerChip("↻", false) { retryPlayback(); overlay = true; tick++ }
                         PlayerChip("⏮", false) { if (current > 0) play(current - 1); overlay = true; tick++ }
                         PlayerChip("−10", false) { seekBy(-10000); overlay = true; tick++ }
-                        PlayerChip(if (player.isPlaying) "Ⅱ" else "▶", true) { if (player.isPlaying) player.pause() else player.play(); overlay = true; tick++ }
+                        PlayerChip(if (player.isPlaying) "Ⅱ" else "▶", true, playRequester) { if (player.isPlaying) player.pause() else player.play(); overlay = true; tick++ }
                         PlayerChip("+10", false) { seekBy(10000); overlay = true; tick++ }
                         PlayerChip("⏭", false) { if (current < playlist.lastIndex) play(current + 1); overlay = true; tick++ }
                         Box {
@@ -869,6 +891,44 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+        }
+    }
+
+    // Ince, TV kumandasıyla (◀ ▶) ve dokunmatikle çalışan ilerleme çubuğu.
+    @Composable
+    private fun SeekBar(pos: Long, dur: Long, onSeek: (Long) -> Unit, onStep: (Long) -> Unit) {
+        var focused by remember { mutableStateOf(false) }
+        var drag by remember { mutableStateOf(-1f) }
+        val frac = if (drag >= 0f) drag else if (dur > 0L) (pos.toFloat() / dur.toFloat()).coerceIn(0f, 1f) else 0f
+        val trackH = if (focused) 6.dp else 3.dp
+        BoxWithConstraints(
+            Modifier.fillMaxWidth().height(20.dp)
+                .onKeyEvent { e ->
+                    if (e.type == KeyEventType.KeyDown && dur > 0L) {
+                        when (e.key) {
+                            Key.DirectionLeft -> { onStep(-10_000L); true }
+                            Key.DirectionRight -> { onStep(10_000L); true }
+                            else -> false
+                        }
+                    } else false
+                }
+                .onFocusChanged { focused = it.isFocused }
+                .focusable()
+                .pointerInput(dur) { detectTapGestures { o -> if (dur > 0L) onSeek((o.x / size.width * dur).toLong()) } }
+                .pointerInput(dur) {
+                    detectHorizontalDragGestures(
+                        onDragStart = { o -> drag = (o.x / size.width).coerceIn(0f, 1f) },
+                        onDragEnd = { if (dur > 0L && drag >= 0f) onSeek((drag * dur).toLong()); drag = -1f },
+                        onDragCancel = { drag = -1f },
+                        onHorizontalDrag = { change, _ -> drag = (change.position.x / size.width).coerceIn(0f, 1f) }
+                    )
+                },
+            contentAlignment = Alignment.CenterStart
+        ) {
+            val w = maxWidth
+            Box(Modifier.fillMaxWidth().height(trackH).clip(RoundedCornerShape(50)).background(Color(0x44FFFFFF)))
+            Box(Modifier.width(w * frac).height(trackH).clip(RoundedCornerShape(50)).background(Color(0xFFFF5264)))
+            Box(Modifier.offset(x = (w * frac) - 6.dp).size(if (focused) 14.dp else 11.dp).clip(RoundedCornerShape(50)).background(Color.White))
         }
     }
 
@@ -913,11 +973,12 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun PlayerChip(t: String, on: Boolean, click: () -> Unit) {
+    private fun PlayerChip(t: String, on: Boolean, requester: FocusRequester? = null, click: () -> Unit) {
         var f by remember { mutableStateOf(false) }
         Box(Modifier.onFocusChanged { f = it.isFocused }.scale(if (f) 1.08f else 1f)
             .clip(RoundedCornerShape(50)).background(if (on) Color(0xFF7C9CFF) else Color(0x33FFFFFF))
             .border(if (f) 3.dp else 0.dp, Color.White, RoundedCornerShape(50))
+            .then(if (requester != null) Modifier.focusRequester(requester) else Modifier)
             .focusable().clickable { click() }.padding(horizontal = 9.dp, vertical = 5.dp)) {
             Text(t, color = if (on) Color(0xFF0A0C14) else Color.White, fontSize = 11.sp, fontWeight = FontWeight.Medium)
         }
