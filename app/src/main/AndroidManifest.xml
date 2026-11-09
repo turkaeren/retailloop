@@ -4,6 +4,7 @@
     <uses-feature android:name="android.software.leanback" android:required="false" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
     <application android:largeHeap="true" android:label="TCL Akademi" android:icon="@drawable/ic_launcher" android:banner="@drawable/tv_banner" android:theme="@android:style/Theme.Material.NoActionBar">
         <activity android:name=".MainActivity" android:exported="true" android:screenOrientation="landscape">
