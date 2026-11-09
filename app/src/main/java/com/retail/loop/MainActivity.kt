@@ -150,12 +150,35 @@ class MainActivity : ComponentActivity() {
                 playPosition = 0L
                 playDuration = 0L
             }
-            override fun onIsPlayingChanged(isPlaying: Boolean) { playing = isPlaying; if (isPlaying) playerError = "" }
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                playing = isPlaying
+                if (isPlaying) { playerError = ""; playerStatus = ""; retryCount = 0 }
+            }
+            override fun onPlaybackStateChanged(state: Int) {
+                if (state == Player.STATE_BUFFERING) playerStatus = "Arabelleğe alınıyor…"
+                if (state == Player.STATE_READY) { playerStatus = ""; retryCount = 0 }
+            }
             override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
-                val reason = error.cause?.message ?: error.message ?: "Bilinmeyen oynatma hatası"
-                playerError = "Video açılamadı: ${error.errorCodeName}. $reason"
-                playing = false
-                overlay = true
+                retryPosition = player.currentPosition.coerceAtLeast(0L)
+                if (retryCount < 6 && playerOpen) {
+                    retryCount++
+                    val waitMs = (1000L shl (retryCount - 1)).coerceAtMost(32000L)
+                    playerStatus = "Bağlantı yenileniyor… (${retryCount}/6)"
+                    playerError = ""
+                    overlay = true
+                    retryHandler.removeCallbacksAndMessages(null)
+                    retryHandler.postDelayed({
+                        if (playerOpen && player.mediaItemCount > 0) {
+                            runCatching { player.seekTo(retryPosition); player.prepare(); player.play() }
+                        }
+                    }, waitMs)
+                } else {
+                    val reason = error.cause?.message ?: error.message ?: "Bilinmeyen oynatma hatası"
+                    playerError = "Video açılamadı: ${error.errorCodeName}. $reason"
+                    playerStatus = ""
+                    playing = false
+                    overlay = true
+                }
             }
         })
         applyLoop()
@@ -297,7 +320,13 @@ class MainActivity : ComponentActivity() {
         val v = nodes.filter { !it.folder && !it.pdf }
         playlist.clear(); playlist.addAll(v)
         val i = v.indexOf(n).coerceAtLeast(0)
-        player.setMediaItems(v.map { MediaItem.fromUri(it.uri!!) }, i, 0L)
+        val sourceFactory = DefaultMediaSourceFactory(cacheFactory)
+        val localFactory = DefaultMediaSourceFactory(DefaultDataSource.Factory(this))
+        val mediaSources = v.map { node ->
+            val item = MediaItem.fromUri(node.uri!!)
+            if (node.uri.scheme == "content") localFactory.createMediaSource(item) else sourceFactory.createMediaSource(item)
+        }
+        player.setMediaSources(mediaSources, i, 0L)
         playbackActive = true
         prefetchCancelled = false
         retryCount = 0
@@ -339,12 +368,14 @@ class MainActivity : ComponentActivity() {
     private fun seekToPosition(position: Long) {
         val duration = player.duration
         if (player.currentMediaItem == null || duration <= 0L) return
+        player.setSeekParameters(SeekParameters.CLOSEST_SYNC)
         runCatching { player.seekTo(position.coerceIn(0L, duration)) }
             .onFailure { playerError = "İleri/geri sarma başarısız. Akış bağlantısını kontrol edin." }
     }
 
     private fun seekBy(ms: Long) {
         if (player.currentMediaItem == null) return
+        player.setSeekParameters(SeekParameters.CLOSEST_SYNC)
         val duration = player.duration
         if (duration <= 0L) return
         seekToPosition((player.currentPosition + ms).coerceIn(0L, duration))
@@ -640,6 +671,10 @@ class MainActivity : ComponentActivity() {
             val compact = maxWidth < 600.dp
             val side = if (compact) 14.dp else 44.dp
             AndroidView(factory = { PlayerView(it).apply { useController = false; this.player = this@MainActivity.player; isFocusable = false } }, modifier = Modifier.fillMaxSize())
+            if (playerStatus.isNotBlank() && playerError.isBlank()) {
+                Text(playerStatus, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.align(Alignment.Center).background(Color(0x99000000), RoundedCornerShape(12.dp)).padding(horizontal = 22.dp, vertical = 14.dp))
+            }
             if (playerError.isNotBlank()) {
                 Column(Modifier.align(Alignment.Center).padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                     Text("Bu video oynatılamadı", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
