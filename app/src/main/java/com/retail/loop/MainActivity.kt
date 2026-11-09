@@ -465,6 +465,17 @@ class MainActivity : ComponentActivity() {
         seekToPosition((player.currentPosition + ms).coerceIn(0L, duration))
     }
 
+    private fun openInExternalPlayer() {
+        val node = playlist.getOrNull(current) ?: return
+        try {
+            val intent = Intent(Intent.ACTION_VIEW).setDataAndType(node.uri, "video/*")
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            startActivity(Intent.createChooser(intent, "Videoyu hangi oynatıcıda açalım?"))
+        } catch (_: Exception) {
+            playerError = "Bu kapsayıcı Media3 tarafından desteklenmiyor. VLC gibi uyumlu bir TV oynatıcı yükleyip tekrar deneyin."
+        }
+    }
+
     private fun retryPlayback() {
         val index = player.currentMediaItemIndex.takeIf { it >= 0 } ?: current
         val position = player.currentPosition.coerceAtLeast(0L)
@@ -782,6 +793,8 @@ class MainActivity : ComponentActivity() {
                     Text("Bu video oynatılamadı", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
                     Text(playerError, color = Color(0xFFFFAAB2), fontSize = 12.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 10.dp))
                     Text("Bağlantıyı yeniden kurmayı deneyebilirsin.", color = Color.LightGray, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
+                    Spacer(Modifier.height(14.dp))
+                    PlayerChip("Harici oynatıcıda aç", true) { openInExternalPlayer() }
                 }
             }
             // A tap anywhere on the video brings the YouTube-style controls back.
