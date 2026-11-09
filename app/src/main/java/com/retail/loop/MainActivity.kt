@@ -173,7 +173,61 @@ class MainActivity : ComponentActivity() {
         load()
     }
 
-    override fun onDestroy() { runCatching { unregisterReceiver(mountReceiver) }; player.release(); super.onDestroy() }
+    override fun onDestroy() {
+        prefetchCancelled = true
+        retryHandler.removeCallbacksAndMessages(null)
+        runCatching { unregisterReceiver(mountReceiver) }
+        player.release()
+        if (::simpleCache.isInitialized) simpleCache.release()
+        super.onDestroy()
+    }
+
+    private fun cacheKey(uri: Uri): String = uri.getQueryParameter("id") ?: uri.toString()
+    private fun isOfflineReady(n: Node): Boolean {
+        if (n.uri == null || n.uri.scheme == "content" || !::simpleCache.isInitialized) return false
+        val key = cacheKey(n.uri)
+        val length = simpleCache.getContentMetadata(key).get(androidx.media3.datasource.cache.ContentMetadata.KEY_CONTENT_LENGTH, -1L)
+        return length > 0L && simpleCache.isCached(key, 0L, length)
+    }
+    private fun startFolderPrefetch() {
+        if (!::simpleCache.isInitialized) return
+        prefetchCancelled = false
+        prefetchThread?.interrupt()
+        val candidates = nodes.filter { !it.folder && !it.pdf && it.uri?.scheme == "https" }
+        if (candidates.isEmpty()) { downloadStatus = "İndirilecek video yok"; return }
+        prefetchThread = Thread {
+            var done = 0
+            runOnUiThread { downloadStatus = "Çevrimdışı hazırlık başlıyor…" }
+            for (node in candidates) {
+                if (prefetchCancelled || Thread.currentThread().isInterrupted) break
+                while (playbackActive && !prefetchCancelled) {
+                    try { Thread.sleep(500) } catch (_: InterruptedException) { return@Thread }
+                }
+                if (prefetchCancelled) break
+                val uri = node.uri ?: continue
+                val key = cacheKey(uri)
+                if (isOfflineReady(node)) { done++; continue }
+                try {
+                    val spec = DataSpec.Builder().setUri(uri).setKey(key).build()
+                    CacheWriter(cacheFactory.createDataSource(), spec, null, null).cache()
+                    done++
+                    runOnUiThread {
+                        offlineReady[node.id] = isOfflineReady(node)
+                        downloadStatus = "Çevrimdışı hazırlanıyor: $done/${candidates.size}"
+                    }
+                } catch (_: Exception) {
+                    runOnUiThread { downloadStatus = "İndirme durakladı: ${node.name}" }
+                }
+                val maxBytes = minOf(24L * 1024 * 1024 * 1024, (filesDir.usableSpace.coerceAtLeast(256L * 1024 * 1024) * 0.60).toLong())
+                if (simpleCache.cacheSpace >= (maxBytes * 0.90).toLong()) break
+            }
+            runOnUiThread {
+                offlineReady.clear()
+                candidates.forEach { offlineReady[it.id] = isOfflineReady(it) }
+                downloadStatus = if (prefetchCancelled) "İndirme durduruldu" else "Çevrimdışı hazırlık tamamlandı"
+            }
+        }.apply { name = "RetailLoop-CachePrefetch"; isDaemon = true; start() }
+    }
 
     private fun clean(n: String) = n.substringBeforeLast('.').replace('_', ' ').replace('-', ' ')
 
@@ -217,7 +271,9 @@ class MainActivity : ComponentActivity() {
         }
         fun show(txt: String) {
             nodes.clear()
-            nodes.addAll(parse(txt)); message = if (nodes.isEmpty()) "Klasör listelenemedi veya boş. Drive paylaşımını herkes görüntüleyebilir olarak kontrol edin." else ""
+            nodes.addAll(parse(txt))
+            message = if (nodes.isEmpty()) "Klasör listelenemedi veya boş. Drive paylaşımını herkes görüntüleyebilir olarak kontrol edin." else ""
+            if (nodes.isNotEmpty()) startFolderPrefetch()
         }
         prefs.getString("f_$id", null)?.let { runCatching { show(it) } }
         loading = true
@@ -242,6 +298,10 @@ class MainActivity : ComponentActivity() {
         playlist.clear(); playlist.addAll(v)
         val i = v.indexOf(n).coerceAtLeast(0)
         player.setMediaItems(v.map { MediaItem.fromUri(it.uri!!) }, i, 0L)
+        playbackActive = true
+        prefetchCancelled = false
+        retryCount = 0
+        playerStatus = ""
         playerOpen = true
         overlay = true
         player.prepare()
@@ -252,7 +312,13 @@ class MainActivity : ComponentActivity() {
         player.setPlaybackParameters(PlaybackParameters(1f))
     }
     private fun up() { if (stack.size > 1) { stack.removeAt(stack.lastIndex); load() } }
-    private fun stopPlay() { player.stop(); player.clearMediaItems(); playing = false; playerOpen = false; overlay = false; playerError = ""; if (fullscreen) applyFullscreen(false) }
+    private fun stopPlay() {
+        retryHandler.removeCallbacksAndMessages(null)
+        player.stop(); player.clearMediaItems()
+        playing = false; playbackActive = false; playerOpen = false; overlay = false
+        playerError = ""; playerStatus = ""; retryCount = 0
+        if (fullscreen) applyFullscreen(false)
+    }
     private fun applyFullscreen(enabled: Boolean) {
         fullscreen = enabled
         @Suppress("DEPRECATION")
@@ -539,6 +605,7 @@ class MainActivity : ComponentActivity() {
                 Spacer(Modifier.height(5.dp))
                 Text(if (n.folder) "KLASÖR" else if (n.pdf) "PDF BELGESİ" else "VİDEO",
                     color = Color(0xFF9B9EA7), fontSize = 9.sp, letterSpacing = 1.2.sp)
+                if (isOfflineReady(n)) Text("ÇEVRİMDIŞI HAZIR", color = Color(0xFF7EE0B0), fontSize = 9.sp, fontWeight = FontWeight.Bold)
             }
             Text("›", color = if (focused) Color.White else Color(0xFF777B84), fontSize = 25.sp)
         }
