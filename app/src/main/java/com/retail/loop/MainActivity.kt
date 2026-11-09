@@ -129,9 +129,15 @@ class MainActivity : ComponentActivity() {
             }
         })
         applyLoop()
-        registerReceiver(mountReceiver, IntentFilter().apply {
+        val mountFilter = IntentFilter().apply {
             addAction(Intent.ACTION_MEDIA_MOUNTED); addAction(Intent.ACTION_MEDIA_REMOVED); addAction(Intent.ACTION_MEDIA_EJECT); addDataScheme("file")
-        })
+        }
+        if (Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(mountReceiver, mountFilter, Context.RECEIVER_EXPORTED)
+        } else {
+            @Suppress("DEPRECATION")
+            registerReceiver(mountReceiver, mountFilter)
+        }
         setContent { Ui() }
         perm.launch(if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_VIDEO else Manifest.permission.READ_EXTERNAL_STORAGE)
         load()
@@ -539,11 +545,6 @@ class MainActivity : ComponentActivity() {
                     Text("Bu video oynatılamadı", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
                     Text(playerError, color = Color(0xFFFFAAB2), fontSize = 12.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 10.dp))
                     Text("Bağlantıyı yeniden kurmayı deneyebilirsin.", color = Color.LightGray, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
-                    Spacer(Modifier.height(14.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        PlayerChip("↻ Tekrar dene", true) { retryPlayback(); overlay = true; tick++ }
-                        PlayerChip("‹ Listeye dön", false) { stopPlay() }
-                    }
                 }
             }
             // A tap anywhere on the video brings the YouTube-style controls back.
@@ -595,6 +596,7 @@ class MainActivity : ComponentActivity() {
                         horizontalArrangement = Arrangement.Center,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        if (playerError.isNotBlank()) PlayerChip("↻ Tekrar dene", true) { retryPlayback(); overlay = true; tick++ }
                         PlayerChip("⏮", false) { if (current > 0) play(current - 1); overlay = true; tick++ }
                         PlayerChip("↶ 10 sn", false) { seekBy(-10000); overlay = true; tick++ }
                         PlayerChip(if (player.isPlaying) "Ⅱ" else "▶", true) { if (player.isPlaying) player.pause() else player.play(); overlay = true; tick++ }
