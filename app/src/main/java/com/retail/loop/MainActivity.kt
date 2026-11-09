@@ -127,7 +127,7 @@ class MainActivity : ComponentActivity() {
     private val mountReceiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context?, i: Intent?) { window.decorView.postDelayed({ if (stack.last().first == "usb") load() }, 2500) }
     }
-    private val perm = registerForActivityResult(ActivityResultContracts.RequestPermission()) { if (stack.last().first == "usb") load() }
+    private val perm = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { if (stack.last().first == "usb") load() }
 
     override fun onCreate(s: Bundle?) {
         super.onCreate(s)
@@ -206,7 +206,7 @@ class MainActivity : ComponentActivity() {
             registerReceiver(mountReceiver, mountFilter)
         }
         setContent { Ui() }
-        perm.launch(if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_VIDEO else Manifest.permission.READ_EXTERNAL_STORAGE)
+        perm.launch(if (Build.VERSION.SDK_INT >= 33) arrayOf(Manifest.permission.READ_MEDIA_VIDEO, Manifest.permission.READ_MEDIA_IMAGES) else arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE))
         load()
     }
 
@@ -329,6 +329,22 @@ class MainActivity : ComponentActivity() {
         }.start()
     }
 
+    private fun mediaItemFor(node: Node): MediaItem {
+        val lower = node.name.lowercase()
+        val mime = when {
+            lower.endsWith(".mkv") -> "application/x-matroska"
+            lower.endsWith(".mp4") || lower.endsWith(".m4v") -> "video/mp4"
+            lower.endsWith(".webm") -> "video/webm"
+            lower.endsWith(".ts") || lower.endsWith(".m2ts") -> "video/mp2t"
+            lower.endsWith(".m3u8") -> "application/x-mpegURL"
+            lower.endsWith(".mpd") -> "application/dash+xml"
+            lower.endsWith(".mov") -> "video/quicktime"
+            lower.endsWith(".avi") -> "video/x-msvideo"
+            else -> null
+        }
+        return MediaItem.Builder().setUri(node.uri!!).apply { if (mime != null) setMimeType(mime) }.build()
+    }
+
     private fun open(n: Node) {
         playerError = ""
         if (n.folder) { stack.add(Pair(n.id, n.name)); load(); return }
@@ -339,7 +355,7 @@ class MainActivity : ComponentActivity() {
         val sourceFactory = DefaultMediaSourceFactory(cacheFactory)
         val localFactory = DefaultMediaSourceFactory(DefaultDataSource.Factory(this))
         val mediaSources = v.map { node ->
-            val item = MediaItem.fromUri(node.uri!!)
+            val item = mediaItemFor(node)
             if (node.uri.scheme == "content") localFactory.createMediaSource(item) else sourceFactory.createMediaSource(item)
         }
         player.setMediaSources(mediaSources, i, 0L)
@@ -486,7 +502,7 @@ class MainActivity : ComponentActivity() {
                 player.prepare()
                 player.play()
             } else if (playlist.getOrNull(index) != null) {
-                player.setMediaItem(MediaItem.fromUri(playlist[index].uri!!), position)
+                player.setMediaItem(mediaItemFor(playlist[index]), position)
                 player.prepare()
                 player.play()
             }
