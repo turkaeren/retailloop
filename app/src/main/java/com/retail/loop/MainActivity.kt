@@ -188,7 +188,13 @@ class MainActivity : ComponentActivity() {
             .setReadTimeoutMs(20000)
             .setUserAgent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/128.0.0.0 Safari/537.36")
             .setDefaultRequestProperties(mapOf("Range" to "bytes=0-", "Referer" to "https://drive.google.com/", "Accept" to "*/*"))
-        val upstream = DefaultDataSource.Factory(this, httpFactory)
+        val upstream = androidx.media3.datasource.ResolvingDataSource.Factory(DefaultDataSource.Factory(this, httpFactory),
+            androidx.media3.datasource.ResolvingDataSource.Resolver { spec ->
+                val fid = spec.uri.getQueryParameter("id")
+                val tok = if (fid != null && spec.uri.host == "drive.usercontent.google.com") gdAccessToken() else null
+                if (tok != null) spec.buildUpon().setUri(Uri.parse(gdUrl(fid!!)))
+                    .setHttpRequestHeaders(spec.httpRequestHeaders + mapOf("Authorization" to "Bearer $tok")).build() else spec
+            })
         val freeBytes = filesDir.usableSpace.coerceAtLeast(256L * 1024 * 1024)
         val cacheLimit = minOf(24L * 1024 * 1024 * 1024, (freeBytes * 0.60).toLong()).coerceAtLeast(256L * 1024 * 1024)
         simpleCache = SimpleCache(File(filesDir, "retail_media_cache"), LeastRecentlyUsedCacheEvictor(cacheLimit), StandaloneDatabaseProvider(this))
@@ -233,6 +239,7 @@ class MainActivity : ComponentActivity() {
                 }
                 retryPosition = player.currentPosition.coerceAtLeast(0L)
                 val ec = error.errorCode
+                if (ec == androidx.media3.common.PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS) gdToken = null
                 if (!quotaHit) userMsg = friendlyError(ec)
                 if (ec == androidx.media3.common.PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED || ec == androidx.media3.common.PlaybackException.ERROR_CODE_IO_INVALID_HTTP_CONTENT_TYPE || ec == androidx.media3.common.PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS) {
                     bypassCache = true
@@ -287,6 +294,34 @@ class MainActivity : ComponentActivity() {
         startSync()
         window.decorView.postDelayed({ ensureStorageAccess() }, 3000)
         refreshHandler.postDelayed(refreshTick, 3 * 60_000L)
+    }
+
+    // ---- Drive hesabı ile erişim (kota için): yenileme anahtarından erişim jetonu alır ----
+    @Volatile private var gdToken: String? = null
+    @Volatile private var gdExpiry = 0L
+    private fun gdEnabled() = BuildConfig.GD_CLIENT_ID.isNotBlank() && BuildConfig.GD_CLIENT_SECRET.isNotBlank() && BuildConfig.GD_REFRESH_TOKEN.isNotBlank()
+    private fun gdUrl(id: String) = "https://www.googleapis.com/drive/v3/files/" + id + "?alt=media&supportsAllDrives=true"
+
+    @Synchronized
+    private fun gdAccessToken(): String? {
+        if (!gdEnabled()) return null
+        val t = gdToken
+        if (t != null && System.currentTimeMillis() < gdExpiry - 60_000L) return t
+        return try {
+            val c = URL("https://oauth2.googleapis.com/token").openConnection() as java.net.HttpURLConnection
+            c.requestMethod = "POST"; c.doOutput = true
+            c.connectTimeout = 15000; c.readTimeout = 15000
+            c.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
+            val body = "client_id=" + URLEncoder.encode(BuildConfig.GD_CLIENT_ID, "UTF-8") +
+                "&client_secret=" + URLEncoder.encode(BuildConfig.GD_CLIENT_SECRET, "UTF-8") +
+                "&refresh_token=" + URLEncoder.encode(BuildConfig.GD_REFRESH_TOKEN, "UTF-8") + "&grant_type=refresh_token"
+            c.outputStream.use { it.write(body.toByteArray()) }
+            if (c.responseCode !in 200..299) { gdToken = null; return null }
+            val j = org.json.JSONObject(c.inputStream.bufferedReader().use { it.readText() })
+            gdToken = j.getString("access_token")
+            gdExpiry = System.currentTimeMillis() + j.optLong("expires_in", 3000L) * 1000L
+            gdToken
+        } catch (_: Exception) { null }
     }
 
     // ---- TV deposuna indirme (kalıcı, çevrimdışı oynatma) ----
@@ -393,6 +428,8 @@ class MainActivity : ComponentActivity() {
         val ddir = downloadDir()
         val part = File(ddir, n.id + ".part")
         var url = n.uri.toString()
+        var useApi = false
+        if (gdAccessToken() != null) { url = gdUrl(n.id); useApi = true }
         val ua = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/128.0.0.0 Safari/537.36"
         try {
             for (attempt in 0..2) {
@@ -402,6 +439,7 @@ class MainActivity : ComponentActivity() {
                 c.setRequestProperty("User-Agent", ua)
                 c.setRequestProperty("Referer", "https://drive.google.com/")
                 if (have > 0) c.setRequestProperty("Range", "bytes=$have-")
+                if (useApi) gdAccessToken()?.let { c.setRequestProperty("Authorization", "Bearer $it") }
                 val code = c.responseCode
                 val ct = c.contentType ?: ""
                 if (code == 416 && have > 1_000_000L) { c.disconnect(); part.renameTo(dst); return 0 }
@@ -416,7 +454,16 @@ class MainActivity : ComponentActivity() {
                     url = action + (if (action.contains("?")) "&" else "?") + q
                     continue
                 }
-                if (code !in 200..299) { c.disconnect(); return 2 }
+                if (code !in 200..299) {
+                    val err = runCatching { c.errorStream?.use { it.readNBytes(4000) }?.toString(Charsets.UTF_8) ?: "" }.getOrDefault("")
+                    c.disconnect()
+                    if (err.contains("uota", true) || err.contains("downloadQuotaExceeded", true)) {
+                        if (useApi) { useApi = false; url = n.uri.toString(); continue }
+                        return 1
+                    }
+                    if (useApi && (code == 401 || code == 403 || code == 404)) { gdToken = null; useApi = false; url = n.uri.toString(); continue }
+                    return 2
+                }
                 val append = code == 206 && have > 0
                 val size = if (code == 206) (c.getHeaderField("Content-Range")?.substringAfter('/')?.toLongOrNull() ?: -1L) else c.contentLengthLong
                 if (!append) part.delete()

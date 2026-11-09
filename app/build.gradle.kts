@@ -3,6 +3,12 @@ plugins {
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
 }
+val gdProps = java.util.Properties().apply {
+    val f = file("gdrive.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+fun gdv(k: String): String = (System.getenv("GDRIVE_$k") ?: gdProps.getProperty(k) ?: "").trim()
+
 android {
     namespace = "com.retail.loop"
     compileSdk = 34
@@ -10,6 +16,9 @@ android {
         applicationId = "com.retail.loop"; minSdk = 24; targetSdk = 34
         versionCode = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInt()
         versionName = "1.0." + (System.getenv("GITHUB_RUN_NUMBER") ?: "1")
+        buildConfigField("String", "GD_CLIENT_ID", "\"" + gdv("CLIENT_ID") + "\"")
+        buildConfigField("String", "GD_CLIENT_SECRET", "\"" + gdv("CLIENT_SECRET") + "\"")
+        buildConfigField("String", "GD_REFRESH_TOKEN", "\"" + gdv("REFRESH_TOKEN") + "\"")
     }
     signingConfigs {
         getByName("debug") {
@@ -17,7 +26,7 @@ android {
             keyAlias = "retailloop"; keyPassword = "retailloop"
         }
     }
-    buildFeatures { compose = true }
+    buildFeatures { compose = true; buildConfig = true }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
 }
