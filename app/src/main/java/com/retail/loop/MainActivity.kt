@@ -255,6 +255,130 @@ class MainActivity : ComponentActivity() {
         setContent { Ui() }
         perm.launch(if (Build.VERSION.SDK_INT >= 33) arrayOf(Manifest.permission.READ_MEDIA_VIDEO, Manifest.permission.READ_MEDIA_IMAGES) else arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE))
         if (kiosk && prefs.getString("last_id", null) != null) resumeLast() else load()
+        autoDownload = prefs.getBoolean("autodl", true)
+        java.net.CookieHandler.setDefault(java.net.CookieManager())
+        startSync()
+    }
+
+    // ---- TV deposuna indirme (kalıcı, çevrimdışı oynatma) ----
+    private val dlProgress = mutableStateMapOf<String, Int>()
+    private var autoDownload by mutableStateOf(true)
+    @Volatile private var dlRunning = false
+
+    private fun streamingNow(): Boolean {
+        if (!playbackActive) return false
+        val n = playlist.getOrNull(runCatching { player.currentMediaItemIndex }.getOrDefault(0)) ?: return false
+        return !isOfflineReady(n)
+    }
+
+    private fun nap(ms: Long): Boolean {
+        var left = ms
+        while (left > 0) { if (!autoDownload) return false; Thread.sleep(3000); left -= 3000 }
+        return autoDownload
+    }
+
+    private fun collectVideos(id: String, depth: Int, out: MutableList<Node>) {
+        for (n in parse(fetchPublicFolder(id))) {
+            if (n.folder) { if (depth < 4) collectVideos(n.id, depth + 1, out) }
+            else if (!n.pdf && !n.image && n.uri != null) out += n
+        }
+    }
+
+    private fun startSync() {
+        if (dlRunning || !autoDownload) return
+        dlRunning = true
+        Thread {
+            try {
+                while (autoDownload) {
+                    runOnUiThread { downloadStatus = "Klasör taranıyor…" }
+                    val list = mutableListOf<Node>()
+                    try { collectVideos(Config.FOLDER_ID, 0, list) }
+                    catch (_: Exception) { runOnUiThread { downloadStatus = "Klasör listelenemedi, tekrar denenecek" }; if (!nap(5 * 60_000L)) break; continue }
+                    val todo = list.filter { !isOfflineReady(it) }
+                    if (todo.isEmpty()) {
+                        runOnUiThread { downloadStatus = "Tüm videolar TV'de (${list.size}) ✓" }
+                        if (!nap(20 * 60_000L)) break
+                        continue
+                    }
+                    var wait = 60_000L
+                    for ((i, n) in todo.withIndex()) {
+                        if (!autoDownload) break
+                        while (autoDownload && streamingNow()) Thread.sleep(3000)
+                        when (downloadOne(n, i + 1, todo.size)) {
+                            1 -> { runOnUiThread { downloadStatus = "Drive kota doldu, 30 dk sonra tekrar denenecek" }; wait = 30 * 60_000L; break }
+                            3 -> { runOnUiThread { downloadStatus = "TV'de yer yok, indirme durdu" }; wait = 60 * 60_000L; break }
+                            2 -> wait = 5 * 60_000L
+                        }
+                    }
+                    if (!nap(wait)) break
+                }
+            } finally { dlRunning = false }
+        }.apply { name = "RetailLoop-Sync"; isDaemon = true; start() }
+    }
+
+    // 0 = tamam, 1 = Drive kotası, 2 = başka hata, 3 = yer yok
+    private fun downloadOne(n: Node, idx: Int, total: Int): Int {
+        val dst = localFile(n.id)
+        val part = File(videoDir, n.id + ".part")
+        var url = n.uri.toString()
+        val ua = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/128.0.0.0 Safari/537.36"
+        try {
+            for (attempt in 0..2) {
+                val have = if (part.exists()) part.length() else 0L
+                val c = URL(url).openConnection() as java.net.HttpURLConnection
+                c.connectTimeout = 20000; c.readTimeout = 30000
+                c.setRequestProperty("User-Agent", ua)
+                c.setRequestProperty("Referer", "https://drive.google.com/")
+                if (have > 0) c.setRequestProperty("Range", "bytes=$have-")
+                val code = c.responseCode
+                val ct = c.contentType ?: ""
+                if (code == 416 && have > 1_000_000L) { c.disconnect(); part.renameTo(dst); return 0 }
+                if (ct.startsWith("text/html")) {
+                    val html = c.inputStream.use { it.readNBytes(60000) }.toString(Charsets.UTF_8)
+                    c.disconnect()
+                    if (html.contains("Quota exceeded", true) || html.contains("Too many users", true)) return 1
+                    val form = Regex("(?is)<form[^>]*id=\"download-form\"[^>]*action=\"([^\"]+)\"[^>]*>(.*?)</form>").find(html) ?: return 2
+                    val action = Html.fromHtml(form.groupValues[1], Html.FROM_HTML_MODE_LEGACY).toString()
+                    val q = Regex("(?i)<input[^>]*name=\"([^\"]+)\"[^>]*value=\"([^\"]*)\"").findAll(form.groupValues[2])
+                        .joinToString("&") { URLEncoder.encode(it.groupValues[1], "UTF-8") + "=" + URLEncoder.encode(Html.fromHtml(it.groupValues[2], Html.FROM_HTML_MODE_LEGACY).toString(), "UTF-8") }
+                    url = action + (if (action.contains("?")) "&" else "?") + q
+                    continue
+                }
+                if (code !in 200..299) { c.disconnect(); return 2 }
+                val append = code == 206 && have > 0
+                val size = if (code == 206) (c.getHeaderField("Content-Range")?.substringAfter('/')?.toLongOrNull() ?: -1L) else c.contentLengthLong
+                if (!append) part.delete()
+                val already = if (append) have else 0L
+                if (size > 0 && filesDir.usableSpace < (size - already) + 1536L * 1024 * 1024) { c.disconnect(); return 3 }
+                var done = already
+                var lastUi = 0L
+                c.inputStream.use { ins ->
+                    java.io.FileOutputStream(part, append).use { out ->
+                        val buf = ByteArray(256 * 1024)
+                        while (true) {
+                            if (!autoDownload) { return 2 }
+                            val r = ins.read(buf)
+                            if (r < 0) break
+                            out.write(buf, 0, r)
+                            done += r
+                            val now = System.currentTimeMillis()
+                            if (now - lastUi > 1000) {
+                                lastUi = now
+                                val pct = if (size > 0) (done * 100 / size).toInt() else 0
+                                runOnUiThread { dlProgress[n.id] = pct; downloadStatus = "İndiriliyor $idx/$total · %$pct · ${n.name}" }
+                            }
+                        }
+                    }
+                }
+                c.disconnect()
+                if (size > 0 && done < size) return 2
+                if (done < 1_000_000L) { part.delete(); return 2 }
+                dst.delete(); part.renameTo(dst)
+                runOnUiThread { dlProgress.remove(n.id); offlineReady[n.id] = true }
+                return 0
+            }
+        } catch (_: Exception) { return 2 }
+        return 2
     }
 
     // ---- Otomatik güncelleme (GitHub Releases) ----
@@ -346,88 +470,13 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun cacheKey(uri: Uri): String = uri.getQueryParameter("id") ?: uri.toString()
+    private val videoDir by lazy { File(filesDir, "videos").apply { mkdirs() } }
+    private fun localFile(id: String) = File(videoDir, "$id.vid")
     private fun isOfflineReady(n: Node): Boolean {
-        if (n.uri == null || n.uri.scheme == "content" || !::simpleCache.isInitialized) return false
-        val key = cacheKey(n.uri)
-        val length = simpleCache.getContentMetadata(key).get(androidx.media3.datasource.cache.ContentMetadata.KEY_CONTENT_LENGTH, -1L)
-        return length > 1_000_000L && simpleCache.isCached(key, 0L, length)
+        if (n.uri?.scheme != "https") return false
+        val f = localFile(n.id)
+        return f.exists() && f.length() > 1_000_000L
     }
-    // Bağlantı hatasında sunucunun gerçekte ne döndürdüğünü ekranda göster.
-    // Drive video yerine onay/uyarı sayfası döndürürse: sayfadaki "yine de indir" formunu bulup o adresle devam et.
-    @Volatile private var resolving = false
-    private fun diagnose(n: Node) {
-        val uri = n.uri ?: return
-        if (uri.scheme != "https" || resolving) return
-        resolving = true
-        val idx = player.currentMediaItemIndex
-        Thread {
-            var msg: String
-            try {
-                val c = URL(uri.toString()).openConnection() as java.net.HttpURLConnection
-                c.connectTimeout = 10000; c.readTimeout = 10000
-                c.setRequestProperty("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/128.0.0.0 Safari/537.36")
-                c.setRequestProperty("Referer", "https://drive.google.com/")
-                val code = c.responseCode
-                val ct = c.contentType ?: "?"
-                val stream = if (code in 200..399) c.inputStream else c.errorStream
-                if (ct.startsWith("text/html")) {
-                    val html = stream?.use { it.readNBytes(60000) }?.toString(Charsets.UTF_8) ?: ""
-                    c.disconnect()
-                    val form = Regex("(?is)<form[^>]*id=\"download-form\"[^>]*action=\"([^\"]+)\"[^>]*>(.*?)</form>").find(html)
-                    if (form != null) {
-                        val action = Html.fromHtml(form.groupValues[1], Html.FROM_HTML_MODE_LEGACY).toString()
-                        val q = Regex("(?i)<input[^>]*name=\"([^\"]+)\"[^>]*value=\"([^\"]*)\"").findAll(form.groupValues[2])
-                            .joinToString("&") { URLEncoder.encode(it.groupValues[1], "UTF-8") + "=" + URLEncoder.encode(Html.fromHtml(it.groupValues[2], Html.FROM_HTML_MODE_LEGACY).toString(), "UTF-8") }
-                        val fixed = Uri.parse(action + (if (action.contains("?")) "&" else "?") + q)
-                        runOnUiThread {
-                            retryHandler.removeCallbacksAndMessages(null)
-                            if (idx in 0 until player.mediaItemCount) {
-                                val it0 = player.getMediaItemAt(idx)
-                                player.replaceMediaItem(idx, it0.buildUpon().setUri(fixed).build())
-                                player.prepare(); player.play()
-                                playerStatus = "Drive onayı geçiliyor…"
-                            }
-                        }
-                        msg = "Drive onay sayfası bulundu, yeniden deneniyor"
-                    } else {
-                        val txt = html.replace(Regex("(?is)<(script|style)[^>]*>.*?</\\1>"), " ").replace(Regex("<[^>]*>"), " ").replace(Regex("\\s+"), " ").trim()
-                        msg = "Drive sayfası ($code): " + txt.take(220)
-                    }
-                } else {
-                    c.disconnect()
-                    msg = "HTTP $code · $ct"
-                }
-            } catch (e: Exception) { msg = "Kontrol hatası: " + e.javaClass.simpleName }
-            runOnUiThread { diagText = msg; resolving = false }
-        }.apply { isDaemon = true; start() }
-    }
-
-    // Kartın üstüne gelince videonun ilk 6 MB'ını önceden indir: açılış hızlanır.
-    private fun warmUp(n: Node) {
-        val uri = n.uri ?: return
-        if (n.folder || n.pdf || n.image || uri.scheme != "https" || playbackActive || offlineReady[n.id] == true || System.currentTimeMillis() < driveBlockedUntil) return
-        warmTask?.let { warmHandler.removeCallbacks(it) }
-        runCatching { warmWriter?.cancel() }
-        val g = ++warmGen
-        val t = Runnable {
-            warmExec.execute {
-                if (g != warmGen || playbackActive) return@execute
-                try {
-                    val spec = DataSpec.Builder().setUri(uri).setKey(cacheKey(uri)).setLength(6L * 1024 * 1024).build()
-                    val w = CacheWriter(cacheFactory.createDataSource(), spec, null, null)
-                    warmWriter = w
-                    w.cache()
-                    val wl = simpleCache.getContentMetadata(cacheKey(uri)).get(androidx.media3.datasource.cache.ContentMetadata.KEY_CONTENT_LENGTH, -1L)
-                    if (wl in 0L..1_000_000L) simpleCache.removeResource(cacheKey(uri))
-                } catch (_: Exception) {
-                } finally { warmWriter = null }
-            }
-        }
-        warmTask = t
-        warmHandler.postDelayed(t, 600)
-    }
-
-    // Çevrimdışı hazır durumunu arka planda hesapla; liste çizilirken önbelleğe dokunma.
     private fun refreshOffline() {
         val list = nodes.filter { !it.folder && !it.pdf && !it.image && it.uri?.scheme == "https" }
         if (list.isEmpty()) return
@@ -594,7 +643,8 @@ class MainActivity : ComponentActivity() {
             lower.endsWith(".avi") -> "video/x-msvideo"
             else -> null
         }
-        return MediaItem.Builder().setUri(node.uri!!).apply { if (mime != null) setMimeType(mime) }.build()
+        val src = if (isOfflineReady(node)) Uri.fromFile(localFile(node.id)) else node.uri!!
+        return MediaItem.Builder().setUri(src).apply { if (mime != null) setMimeType(mime) }.build()
     }
 
     private fun open(n: Node) {
@@ -610,7 +660,8 @@ class MainActivity : ComponentActivity() {
         val localFactory = DefaultMediaSourceFactory(DefaultDataSource.Factory(this))
         val mediaSources = v.map { node ->
             val item = mediaItemFor(node)
-            if (node.uri?.scheme == "content") localFactory.createMediaSource(item) else sourceFactory.createMediaSource(item)
+            val sch = item.localConfiguration?.uri?.scheme
+            if (sch == "content" || sch == "file") localFactory.createMediaSource(item) else sourceFactory.createMediaSource(item)
         }
         player.setMediaSources(mediaSources, i, 0L)
         stopPrefetch()
@@ -920,8 +971,14 @@ class MainActivity : ComponentActivity() {
                         kiosk = !kiosk
                         prefs.edit().putBoolean("kiosk", kiosk).apply()
                     }
+                    SidebarItem(if (autoDownload) "TV'ye indir: açık" else "TV'ye indir: kapalı", "⬇", autoDownload, compact) {
+                        autoDownload = !autoDownload
+                        prefs.edit().putBoolean("autodl", autoDownload).apply()
+                        if (autoDownload) startSync()
+                    }
                     Spacer(Modifier.weight(1f))
                     Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 10.dp)) {
+                        if (autoDownload) Text(downloadStatus, color = Color(0xFF4DA3FF), fontSize = 9.sp, maxLines = 3, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(bottom = 6.dp))
                         Text(if (loading) "İÇERİKLER YÜKLENİYOR" else "KÜTÜPHANE HAZIR",
                             color = Color(0xFF858B9A), fontSize = 9.sp, letterSpacing = 1.1.sp)
                         if (kiosk) Text("Açılışta son videodan devam eder", color = Color(0xFF747B8C), fontSize = 9.sp, modifier = Modifier.padding(bottom = 5.dp))
@@ -1029,6 +1086,9 @@ class MainActivity : ComponentActivity() {
                 Text(if (n.folder) "▰" else if (n.pdf) "PDF" else if (n.image) "JPG" else "▶",
                     color = if (n.pdf || n.image) Color(0xFFFF9AA7) else Color.White,
                     fontSize = if (n.pdf || n.image) 17.sp else 25.sp, fontWeight = FontWeight.Bold)
+                if (offlineReady[n.id] == true) Box(Modifier.align(Alignment.TopEnd).padding(4.dp).size(18.dp).clip(androidx.compose.foundation.shape.CircleShape).background(Color(0xFF2F8BFF)), contentAlignment = Alignment.Center) {
+                    Text("✓", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                }
             }
             Spacer(Modifier.width(13.dp))
             Column(Modifier.weight(1f)) {
@@ -1037,7 +1097,8 @@ class MainActivity : ComponentActivity() {
                 Spacer(Modifier.height(5.dp))
                 Text(if (n.folder) "KLASÖR" else if (n.pdf) "PDF BELGESİ" else if (n.image) "GÖRSEL" else "VİDEO",
                     color = Color(0xFF9B9EA7), fontSize = 9.sp, letterSpacing = 1.2.sp)
-                if (offlineReady[n.id] == true) Text("ÇEVRİMDIŞI HAZIR", color = Color(0xFF7EE0B0), fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                if (offlineReady[n.id] == true) Text("TV\'DE KAYITLI", color = Color(0xFF4DA3FF), fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                else dlProgress[n.id]?.let { Text("İNDİRİLİYOR %$it", color = Color(0xFFFFD28A), fontSize = 9.sp, fontWeight = FontWeight.Bold) }
             }
             Text("›", color = if (focused) Color.White else Color(0xFF777B84), fontSize = 25.sp)
         }
