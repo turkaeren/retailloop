@@ -61,6 +61,7 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
@@ -317,7 +318,48 @@ class MainActivity : ComponentActivity() {
     }
 
     // 0 = tamam, 1 = Drive kotası, 2 = başka hata, 3 = yer yok
+    private val dlActive = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    private val manualBusy = java.util.concurrent.atomic.AtomicInteger(0)
+    private val manualExec = java.util.concurrent.Executors.newSingleThreadExecutor()
+    private var menuNode by mutableStateOf<Node?>(null)
+
+    private fun toast(t: String) = runOnUiThread { android.widget.Toast.makeText(this, t, android.widget.Toast.LENGTH_LONG).show() }
+
     private fun downloadOne(n: Node, idx: Int, total: Int): Int {
+        if (!dlActive.add(n.id)) return 2
+        try { return downloadOneImpl(n, idx, total) } finally { dlActive.remove(n.id) }
+    }
+
+    // Uzun basma menüsünden elle indirme (otomatik indirme kapalı olsa da çalışır).
+    private fun manualDownload(items: () -> List<Node>) {
+        manualBusy.incrementAndGet()
+        toast("İndirme başlıyor…")
+        manualExec.execute {
+            try {
+                val todo = items().filter { !isOfflineReady(it) }
+                if (todo.isEmpty()) { toast("Bu video zaten TV'de ✓"); return@execute }
+                for ((i, n) in todo.withIndex()) {
+                    when (downloadOne(n, i + 1, todo.size)) {
+                        0 -> { if (todo.size == 1) toast("İndirildi ✓ " + n.name) }
+                        1 -> { toast("Drive kotası dolu: bu dosya şu an indirilemiyor. Biraz sonra tekrar dene."); runOnUiThread { downloadStatus = "Drive kota doldu" }; return@execute }
+                        3 -> { toast("TV'de yeterli yer yok"); return@execute }
+                        else -> toast("İndirme başarısız: " + n.name)
+                    }
+                }
+                if (todo.size > 1) toast("İndirme bitti ✓")
+            } catch (_: Exception) {
+                toast("İndirme başarısız")
+            } finally { manualBusy.decrementAndGet() }
+        }
+    }
+
+    private fun deleteLocal(n: Node) {
+        runCatching { localFile(n.id).delete(); File(videoDir, n.id + ".part").delete() }
+        offlineReady.remove(n.id); dlProgress.remove(n.id)
+        toast("TV'den silindi: " + n.name)
+    }
+
+    private fun downloadOneImpl(n: Node, idx: Int, total: Int): Int {
         val dst = localFile(n.id)
         val part = File(videoDir, n.id + ".part")
         var url = n.uri.toString()
@@ -356,7 +398,7 @@ class MainActivity : ComponentActivity() {
                     java.io.FileOutputStream(part, append).use { out ->
                         val buf = ByteArray(256 * 1024)
                         while (true) {
-                            if (!autoDownload) { return 2 }
+                            if (!autoDownload && manualBusy.get() == 0) { return 2 }
                             val r = ins.read(buf)
                             if (r < 0) break
                             out.write(buf, 0, r)
@@ -942,6 +984,28 @@ class MainActivity : ComponentActivity() {
         BackHandler(!playerOpen && stack.size > 1) { up() }
         MaterialTheme(colorScheme = darkColorScheme(primary = Color(0xFF7C9CFF))) {
             Box(Modifier.fillMaxSize().background(Color(0xFF0A0C14))) { if (viewerNode != null) ViewerScreen() else if (playerOpen) PlayerScreen() else Browser() }
+            menuNode?.let { n ->
+                val fr = remember { FocusRequester() }
+                LaunchedEffect(n.id) { runCatching { fr.requestFocus() } }
+                androidx.compose.ui.window.Dialog(onDismissRequest = { menuNode = null }) {
+                    Surface(shape = RoundedCornerShape(16.dp), color = Color(0xFF1C1F2A)) {
+                        Column(Modifier.padding(22.dp).widthIn(min = 320.dp)) {
+                            Text(n.name, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            Text(if (n.folder) "KLASÖR" else if (isOfflineReady(n)) "TV'DE KAYITLI ✓" else "TV'DE YOK", color = Color(0xFF4DA3FF), fontSize = 11.sp, modifier = Modifier.padding(top = 4.dp, bottom = 14.dp))
+                            if (n.folder) {
+                                Button(onClick = { menuNode = null; manualDownload { val l = mutableListOf<Node>(); runCatching { collectVideos(n.id, 0, l) }; l } }, modifier = Modifier.fillMaxWidth().focusRequester(fr)) { Text("Klasördeki videoları indir") }
+                            } else {
+                                if (!isOfflineReady(n)) Button(onClick = { menuNode = null; manualDownload { listOf(n) } }, modifier = Modifier.fillMaxWidth().focusRequester(fr)) { Text("TV'ye indir") }
+                                Spacer(Modifier.height(8.dp))
+                                Button(onClick = { menuNode = null; open(n) }, modifier = Modifier.fillMaxWidth().then(if (isOfflineReady(n)) Modifier.focusRequester(fr) else Modifier)) { Text("Oynat") }
+                                if (isOfflineReady(n)) { Spacer(Modifier.height(8.dp)); OutlinedButton(onClick = { menuNode = null; deleteLocal(n) }, modifier = Modifier.fillMaxWidth()) { Text("TV'den sil") } }
+                            }
+                            Spacer(Modifier.height(8.dp))
+                            TextButton(onClick = { menuNode = null }, modifier = Modifier.fillMaxWidth()) { Text("İptal") }
+                        }
+                    }
+                }
+            }
             updateInfo?.let { (ver, notes) ->
                 if (!playerOpen) AlertDialog(
                     onDismissRequest = { lastInstallPrompt = System.currentTimeMillis(); updateInfo = null },
@@ -1053,7 +1117,7 @@ class MainActivity : ComponentActivity() {
                     }
                     Spacer(Modifier.weight(1f))
                     Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 10.dp)) {
-                        if (autoDownload) Text(downloadStatus, color = Color(0xFF4DA3FF), fontSize = 9.sp, maxLines = 3, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(bottom = 6.dp))
+                        if (downloadStatus != "İndirme beklemede") Text(downloadStatus, color = Color(0xFF4DA3FF), fontSize = 9.sp, maxLines = 3, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(bottom = 6.dp))
                         Text(if (loading) "İÇERİKLER YÜKLENİYOR" else "KÜTÜPHANE HAZIR",
                             color = Color(0xFF858B9A), fontSize = 9.sp, letterSpacing = 1.1.sp)
                         if (kiosk) Text("Açılışta son videodan devam eder", color = Color(0xFF747B8C), fontSize = 9.sp, modifier = Modifier.padding(bottom = 5.dp))
@@ -1146,12 +1210,18 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun Tile(n: Node, compact: Boolean, click: () -> Unit) {
         var focused by remember { mutableStateOf(false) }
+        var lastLong by remember { mutableLongStateOf(0L) }
         val shape = RoundedCornerShape(10.dp)
         Row(
             Modifier.fillMaxWidth().onFocusChanged { focused = it.isFocused; }
+                .onPreviewKeyEvent { ev ->
+                    val k = ev.key
+                    if (!n.pdf && !n.image && n.uri?.scheme != "content" && ev.type == KeyEventType.KeyDown && ev.nativeKeyEvent.isLongPress &&
+                        (k == Key.DirectionCenter || k == Key.Enter || k == Key.NumPadEnter)) { lastLong = System.currentTimeMillis(); menuNode = n; true } else false
+                }
                 .background(if (focused) Color(0xFF303239) else Color(0xFF1C1E23), shape)
                 .border(if (focused) 2.dp else 1.dp, if (focused) Color.White else Color(0xFF303239), shape)
-                .clip(shape).focusable().clickable { click() }.padding(10.dp),
+                .clip(shape).focusable().clickable { if (System.currentTimeMillis() - lastLong > 1200) click() }.padding(10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Box(Modifier.size(if (compact) 92.dp else 116.dp, if (compact) 58.dp else 72.dp)
