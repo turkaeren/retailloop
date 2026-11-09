@@ -32,6 +32,11 @@ jobs:
         with:
           name: retailloop-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
+      - name: Release notes
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          MSG: ${{ github.event.head_commit.message }}
+        run: printf '%s\n' "$MSG" | grep -v -E '^(Co-Authored-By|Claude-Session):' | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' > release-notes.md
       - name: Publish GitHub Release
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
@@ -39,4 +44,4 @@ jobs:
           tag_name: v1.0.${{ github.run_number }}
           name: RetailLoop v1.0.${{ github.run_number }}
           files: app/build/outputs/apk/debug/app-debug.apk
-          generate_release_notes: true
+          body_path: release-notes.md

@@ -259,6 +259,9 @@ class MainActivity : ComponentActivity() {
 
     // ---- Otomatik güncelleme (GitHub Releases) ----
     @Volatile private var updateApk: File? = null
+    private var updateInfo by mutableStateOf<Pair<String, String>?>(null)
+    @Volatile private var updateTitle = ""
+    @Volatile private var updateNotes = ""
     @Volatile private var updateChecking = false
     private var lastUpdateCheck = 0L
     private var lastInstallPrompt = 0L
@@ -281,6 +284,8 @@ class MainActivity : ComponentActivity() {
                 val j = org.json.JSONObject(c.inputStream.bufferedReader().use { it.readText() })
                 val remote = j.getString("tag_name").substringAfterLast('.').toLongOrNull() ?: return@Thread
                 if (remote <= currentVersionCode()) return@Thread
+                updateTitle = j.getString("tag_name")
+                updateNotes = j.optString("body", "").trim().ifBlank { "Hata düzeltmeleri ve iyileştirmeler." }
                 val assets = j.getJSONArray("assets")
                 var url: String? = null
                 for (i in 0 until assets.length()) {
@@ -303,17 +308,24 @@ class MainActivity : ComponentActivity() {
         }.apply { name = "RetailLoop-Update"; isDaemon = true; start() }
     }
 
-    // Oynatma sırasında yükleme penceresi açma; video durunca/ana ekranda aç.
+    // Güncelleme hazırsa bildirim penceresini göster (oynatma sırasında değil).
     private fun maybeInstall() {
+        if (updateApk?.exists() != true || updateInfo != null) return
+        if (playbackActive || System.currentTimeMillis() - lastInstallPrompt < 2 * 3600_000L) return
+        updateInfo = Pair(updateTitle, updateNotes)
+    }
+
+    // "Yükle" düğmesine basılınca kurulum başlar.
+    private fun installNow() {
         val f = updateApk?.takeIf { it.exists() } ?: return
-        if (playbackActive || System.currentTimeMillis() - lastInstallPrompt < 6 * 3600_000L) return
+        lastInstallPrompt = System.currentTimeMillis()
+        updateInfo = null
         runCatching {
             if (Build.VERSION.SDK_INT >= 26 && !packageManager.canRequestPackageInstalls()) {
-                lastInstallPrompt = System.currentTimeMillis()
                 startActivity(Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
+                lastInstallPrompt = 0L
                 return
             }
-            lastInstallPrompt = System.currentTimeMillis()
             val u = androidx.core.content.FileProvider.getUriForFile(this, "$packageName.fileprovider", f)
             startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(u, "application/vnd.android.package-archive")
                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK))
@@ -804,6 +816,15 @@ class MainActivity : ComponentActivity() {
         BackHandler(!playerOpen && stack.size > 1) { up() }
         MaterialTheme(colorScheme = darkColorScheme(primary = Color(0xFF7C9CFF))) {
             Box(Modifier.fillMaxSize().background(Color(0xFF0A0C14))) { if (viewerNode != null) ViewerScreen() else if (playerOpen) PlayerScreen() else Browser() }
+            updateInfo?.let { (ver, notes) ->
+                if (!playerOpen) AlertDialog(
+                    onDismissRequest = { lastInstallPrompt = System.currentTimeMillis(); updateInfo = null },
+                    title = { Text("Yeni güncelleme var · $ver") },
+                    text = { Text(notes.take(600), fontSize = 15.sp) },
+                    confirmButton = { Button(onClick = { installNow() }) { Text("Yükle") } },
+                    dismissButton = { TextButton(onClick = { lastInstallPrompt = System.currentTimeMillis(); updateInfo = null }) { Text("Sonra") } }
+                )
+            }
         }
     }
 
