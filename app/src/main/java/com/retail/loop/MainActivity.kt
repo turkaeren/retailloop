@@ -272,10 +272,11 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0 && playerOpen) {
-            when (event.keyCode) {
-                KeyEvent.KEYCODE_DPAD_UP -> if (overlay) { overlay = false; return true }
-                KeyEvent.KEYCODE_DPAD_DOWN -> if (!overlay) { overlay = true; return true }
+        // Controls hidden: down/OK shows them. When visible, Compose owns D-pad focus navigation.
+        if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0 && playerOpen && !overlay) {
+            if (event.keyCode == KeyEvent.KEYCODE_DPAD_DOWN || event.keyCode == KeyEvent.KEYCODE_DPAD_CENTER || event.keyCode == KeyEvent.KEYCODE_ENTER) {
+                overlay = true
+                return true
             }
         }
         return super.dispatchKeyEvent(event)
