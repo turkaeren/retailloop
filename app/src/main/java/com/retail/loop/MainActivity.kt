@@ -254,6 +254,71 @@ class MainActivity : ComponentActivity() {
         if (kiosk && prefs.getString("last_id", null) != null) resumeLast() else load()
     }
 
+    // ---- Otomatik güncelleme (GitHub Releases) ----
+    @Volatile private var updateApk: File? = null
+    @Volatile private var updateChecking = false
+    private var lastUpdateCheck = 0L
+    private var lastInstallPrompt = 0L
+
+    private fun currentVersionCode(): Long = runCatching {
+        androidx.core.content.pm.PackageInfoCompat.getLongVersionCode(packageManager.getPackageInfo(packageName, 0))
+    }.getOrDefault(0L)
+
+    private fun checkUpdate() {
+        val now = System.currentTimeMillis()
+        if (updateChecking || now - lastUpdateCheck < 30 * 60_000L) return
+        updateApk?.let { if (it.exists()) { maybeInstall(); return } }
+        updateChecking = true
+        lastUpdateCheck = now
+        Thread {
+            try {
+                val c = URL("https://api.github.com/repos/turkaeren/retailloop/releases/latest").openConnection() as java.net.HttpURLConnection
+                c.connectTimeout = 15000; c.readTimeout = 20000
+                c.setRequestProperty("Accept", "application/vnd.github+json")
+                val j = org.json.JSONObject(c.inputStream.bufferedReader().use { it.readText() })
+                val remote = j.getString("tag_name").substringAfterLast('.').toLongOrNull() ?: return@Thread
+                if (remote <= currentVersionCode()) return@Thread
+                val assets = j.getJSONArray("assets")
+                var url: String? = null
+                for (i in 0 until assets.length()) {
+                    val a = assets.getJSONObject(i)
+                    if (a.getString("name").endsWith(".apk")) { url = a.getString("browser_download_url"); break }
+                }
+                url ?: return@Thread
+                val dir = File(cacheDir, "update").apply { mkdirs() }
+                val part = File(dir, "update.part")
+                val out = File(dir, "update.apk")
+                val d = URL(url).openConnection() as java.net.HttpURLConnection
+                d.connectTimeout = 20000; d.readTimeout = 30000
+                d.inputStream.use { ins -> part.outputStream().use { ins.copyTo(it) } }
+                if (part.length() < 1_000_000L) { part.delete(); return@Thread }
+                out.delete(); part.renameTo(out)
+                updateApk = out
+                runOnUiThread { maybeInstall() }
+            } catch (_: Exception) {
+            } finally { updateChecking = false }
+        }.apply { name = "RetailLoop-Update"; isDaemon = true; start() }
+    }
+
+    // Oynatma sırasında yükleme penceresi açma; video durunca/ana ekranda aç.
+    private fun maybeInstall() {
+        val f = updateApk?.takeIf { it.exists() } ?: return
+        if (playbackActive || System.currentTimeMillis() - lastInstallPrompt < 6 * 3600_000L) return
+        runCatching {
+            if (Build.VERSION.SDK_INT >= 26 && !packageManager.canRequestPackageInstalls()) {
+                lastInstallPrompt = System.currentTimeMillis()
+                startActivity(Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
+                return
+            }
+            lastInstallPrompt = System.currentTimeMillis()
+            val u = androidx.core.content.FileProvider.getUriForFile(this, "$packageName.fileprovider", f)
+            startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(u, "application/vnd.android.package-archive")
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK))
+        }
+    }
+
+    override fun onResume() { super.onResume(); checkUpdate() }
+
     override fun onDestroy() {
         prefetchCancelled = true
         stopPrefetch()
@@ -597,6 +662,7 @@ class MainActivity : ComponentActivity() {
         playing = false; playbackActive = false; playerOpen = false; overlay = false
         playerError = ""; playerStatus = ""; retryCount = 0
         if (fullscreen) applyFullscreen(false)
+        window.decorView.postDelayed({ maybeInstall() }, 1500)
     }
     private fun applyFullscreen(enabled: Boolean) {
         fullscreen = enabled
