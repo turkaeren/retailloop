@@ -750,18 +750,24 @@ class MainActivity : ComponentActivity() {
         }.apply { name = "RetailLoop-CachePrefetch"; isDaemon = true; start() }
     }
 
-    private fun clean(n: String) = n.substringBeforeLast('.').replace('_', ' ').replace('-', ' ')
+    private fun clean(n: String): String {
+        val base = if (n.substringAfterLast('.', "").length in 2..4) n.substringBeforeLast('.') else n
+        return base.replace('_', ' ').replace(Regex("\\s+"), " ").trim()
+    }
 
     // Public Google Drive folders can be read from Drive's embedded folder view without an API key.
     private fun parse(html: String): List<Node> {
         val result = mutableListOf<Node>()
-        val itemRegex = Regex("""(?is)<a[^>]+href="([^"]+)"[^>]*>.*?class="flip-entry-title"[^>]*>(.*?)</div>""")
         val idRegex = Regex("""/(?:file/d|drive/folders)/([A-Za-z0-9_-]+)|[?&]id=([A-Za-z0-9_-]+)""")
-        for (m in itemRegex.findAll(html)) {
-            val link = Html.fromHtml(m.groupValues[1], Html.FROM_HTML_MODE_LEGACY).toString()
-            val name = Html.fromHtml(m.groupValues[2], Html.FROM_HTML_MODE_LEGACY).toString().trim()
-            val idMatch = idRegex.find(link) ?: continue
-            val id = idMatch.groupValues.drop(1).firstOrNull { it.isNotBlank() } ?: continue
+        val titleRegex = Regex("""(?is)class="flip-entry-title"[^>]*>(.*?)</div>""")
+        val hrefRegex = Regex("""(?is)<a[^>]+href="([^"]+)"""")
+        // Her dosya kendi bloğundan okunur: isim ile bağlantı asla başka bir dosyayla karışmaz.
+        val blocks = html.split(Regex("""(?i)<div[^>]+class="flip-entry"""")).drop(1)
+        for (blk in blocks) {
+            val name = titleRegex.find(blk)?.groupValues?.get(1)?.let { Html.fromHtml(it, Html.FROM_HTML_MODE_LEGACY).toString().trim() } ?: continue
+            val link = hrefRegex.find(blk)?.groupValues?.get(1)?.let { Html.fromHtml(it, Html.FROM_HTML_MODE_LEGACY).toString() } ?: ""
+            val entryId = Regex("""id="entry-([A-Za-z0-9_-]+)"""").find(blk)?.groupValues?.get(1)
+            val id = entryId ?: idRegex.find(link)?.groupValues?.drop(1)?.firstOrNull { it.isNotBlank() } ?: continue
             if (name.isBlank()) continue
             val folder = link.contains("/folders/")
             val lowerName = name.lowercase()
@@ -1285,14 +1291,29 @@ class MainActivity : ComponentActivity() {
 
     // İnmiş videodan gerçek bir kare çıkarıp küçük resim yapar (diske kaydeder).
     private fun makeThumb(n: Node): androidx.compose.ui.graphics.ImageBitmap? {
-        val cf = File(File(cacheDir, "thumbs").apply { mkdirs() }, n.id + ".jpg")
-        if (cf.exists() && cf.length() > 0) return runCatching { BitmapFactory.decodeFile(cf.path)?.asImageBitmap() }.getOrNull()
         val src = localFile(n.id)
         if (!src.exists()) return null
+        // Dosya boyutu adın parçası: dosya değişirse eski kapak kullanılmaz.
+        val cf = File(File(cacheDir, "thumbs").apply { mkdirs() }, n.id + "_" + src.length() + ".jpg")
+        if (cf.exists() && cf.length() > 0) return runCatching { BitmapFactory.decodeFile(cf.path)?.asImageBitmap() }.getOrNull()
         val r = android.media.MediaMetadataRetriever()
         return try {
             r.setDataSource(src.path)
-            val bmp = r.getFrameAtTime(2_000_000L, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC) ?: r.getFrameAtTime(0L) ?: return null
+            val durUs = (r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L) * 1000L
+            var best: Bitmap? = null
+            var bestLum = -1
+            for (f in floatArrayOf(0.15f, 0.30f, 0.05f, 0.5f)) {
+                val t = if (durUs > 0) (durUs * f).toLong() else 2_000_000L
+                val fr = r.getFrameAtTime(t, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC) ?: continue
+                var sum = 0L; var cnt = 0
+                val stepX = (fr.width / 12).coerceAtLeast(1); val stepY = (fr.height / 8).coerceAtLeast(1)
+                var y = 0
+                while (y < fr.height) { var x = 0; while (x < fr.width) { val c = fr.getPixel(x, y); sum += ((c shr 16 and 0xFF) + (c shr 8 and 0xFF) + (c and 0xFF)) / 3; cnt++; x += stepX }; y += stepY }
+                val lum = if (cnt > 0) (sum / cnt).toInt() else 0
+                if (lum > bestLum) { best = fr; bestLum = lum }
+                if (lum > 40) { best = fr; break }
+            }
+            val bmp = best ?: return null
             val w = 640
             val h = (w.toFloat() * bmp.height / bmp.width).toInt().coerceAtLeast(1)
             val sc = Bitmap.createScaledBitmap(bmp, w, h, true)
