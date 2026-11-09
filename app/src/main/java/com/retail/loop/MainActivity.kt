@@ -6,6 +6,8 @@ import android.text.Html
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.MediaStore
 import android.view.KeyEvent
 import android.view.WindowManager
@@ -51,16 +53,24 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.Player
+import androidx.media3.common.SeekParameters
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.DataSpec
+import androidx.media3.datasource.cache.CacheDataSource
+import androidx.media3.datasource.cache.CacheWriter
+import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
+import androidx.media3.datasource.cache.SimpleCache
+import androidx.media3.database.StandaloneDatabaseProvider
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.delay
+import java.io.File
 import org.json.JSONObject
 import java.net.URL
 import java.net.URLEncoder
@@ -88,6 +98,17 @@ class MainActivity : ComponentActivity() {
     private var playbackSpeed by mutableFloatStateOf(1f)
     private var playerError by mutableStateOf("")
     private var playerUiActivity by mutableIntStateOf(0)
+    private var playerStatus by mutableStateOf("")
+    private var downloadStatus by mutableStateOf("İndirme beklemede")
+    private val offlineReady = mutableStateMapOf<String, Boolean>()
+    private lateinit var simpleCache: SimpleCache
+    private lateinit var cacheFactory: CacheDataSource.Factory
+    @Volatile private var playbackActive = false
+    @Volatile private var prefetchCancelled = false
+    private var prefetchThread: Thread? = null
+    private val retryHandler = Handler(Looper.getMainLooper())
+    private var retryCount = 0
+    private var retryPosition = 0L
 
     private val mountReceiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context?, i: Intent?) { window.decorView.postDelayed({ if (stack.last().first == "usb") load() }, 2500) }
@@ -105,16 +126,21 @@ class MainActivity : ComponentActivity() {
             .setReadTimeoutMs(45000)
             .setDefaultRequestProperties(mapOf("Referer" to "https://drive.google.com/", "Accept" to "*/*"))
         val upstream = DefaultDataSource.Factory(this, httpFactory)
+        val freeBytes = filesDir.usableSpace.coerceAtLeast(256L * 1024 * 1024)
+        val cacheLimit = minOf(24L * 1024 * 1024 * 1024, (freeBytes * 0.60).toLong()).coerceAtLeast(256L * 1024 * 1024)
+        simpleCache = SimpleCache(File(cacheDir, "retail_media_cache"), LeastRecentlyUsedCacheEvictor(cacheLimit), StandaloneDatabaseProvider(this))
+        cacheFactory = CacheDataSource.Factory().setCache(simpleCache).setUpstreamDataSourceFactory(upstream)
+            .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+            .setCacheKeyFactory { spec -> spec.uri.getQueryParameter("id") ?: spec.key ?: spec.uri.toString() }
         val lc = DefaultLoadControl.Builder()
-            .setBufferDurationsMs(15000, 50000, 1500, 3500)
-            .setTargetBufferBytes(64 * 1024 * 1024)
-            .setPrioritizeTimeOverSizeThresholds(true)
-            .build()
+            .setBufferDurationsMs(30000, 120000, 6000, 15000)
+            .setTargetBufferBytes(160 * 1024 * 1024)
+            .setPrioritizeTimeOverSizeThresholds(true).build()
         val rf = DefaultRenderersFactory(this).setEnableDecoderFallback(true)
-        player = ExoPlayer.Builder(this, rf)
-            .setLoadControl(lc)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(upstream))
-            .build().apply { playWhenReady = true }
+        val sourceFactory = DefaultMediaSourceFactory(cacheFactory)
+            .setLoadErrorHandlingPolicy(androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy(10))
+        player = ExoPlayer.Builder(this, rf).setLoadControl(lc).setMediaSourceFactory(sourceFactory)
+            .build().apply { playWhenReady = true; setSeekParameters(SeekParameters.CLOSEST_SYNC) }
         player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
             .setPreferredAudioMimeTypes(MimeTypes.AUDIO_E_AC3_JOC, MimeTypes.AUDIO_E_AC3, MimeTypes.AUDIO_AC3).build()
         player.addListener(object : Player.Listener {
