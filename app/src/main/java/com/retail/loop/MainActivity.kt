@@ -115,7 +115,12 @@ class MainActivity : ComponentActivity() {
         player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
             .setPreferredAudioMimeTypes(MimeTypes.AUDIO_E_AC3_JOC, MimeTypes.AUDIO_E_AC3, MimeTypes.AUDIO_AC3).build()
         player.addListener(object : Player.Listener {
-            override fun onMediaItemTransition(m: MediaItem?, r: Int) { current = player.currentMediaItemIndex; prefetch(current + 1) }
+            override fun onMediaItemTransition(m: MediaItem?, r: Int) {
+                current = player.currentMediaItemIndex
+                playerError = ""
+                playPosition = 0L
+                playDuration = 0L
+            }
             override fun onIsPlayingChanged(isPlaying: Boolean) { playing = isPlaying; if (isPlaying) playerError = "" }
             override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
                 val reason = error.cause?.message ?: error.message ?: "Bilinmeyen oynatma hatası"
@@ -204,7 +209,12 @@ class MainActivity : ComponentActivity() {
         player.setMediaItems(v.map { MediaItem.fromUri(it.uri!!) }, i, 0L)
         playerOpen = true
         overlay = true
-        player.prepare(); player.play(); current = i; playing = true; playbackSpeed = 1f; player.setPlaybackParameters(PlaybackParameters(1f)); prefetch(i + 1)
+        player.prepare()
+        player.play()
+        current = i
+        playing = true
+        playbackSpeed = 1f
+        player.setPlaybackParameters(PlaybackParameters(1f))
     }
     private fun up() { if (stack.size > 1) { stack.removeAt(stack.lastIndex); load() } }
     private fun stopPlay() { player.stop(); player.clearMediaItems(); playing = false; playerOpen = false; overlay = false; playerError = ""; if (fullscreen) applyFullscreen(false) }
@@ -216,13 +226,6 @@ class MainActivity : ComponentActivity() {
     private fun setSpeed(speed: Float) { playbackSpeed = speed; player.setPlaybackParameters(PlaybackParameters(speed)) }
     private fun play(i: Int) { if (i in playlist.indices) { player.seekTo(i, 0); player.play(); current = i; playing = true } }
     private fun seekBy(ms: Long) { val d = player.duration.takeIf { it > 0 } ?: return; player.seekTo((player.currentPosition + ms).coerceIn(0L, d)) }
-
-    private fun prefetch(i: Int) {
-        if (playlist.isEmpty()) return
-        val d = playlist[i % playlist.size]
-        if (d.uri?.scheme != "https") return
-        Thread { try { CacheWriter(dsFactory.createDataSource(), DataSpec.Builder().setUri(d.uri!!).setLength(24L * 1024 * 1024).build(), null, null).cache() } catch (_: Exception) {} }.start()
-    }
 
     private fun applyLoop() {
         player.repeatMode = when (loopMode) { 0 -> Player.REPEAT_MODE_ONE; 1 -> Player.REPEAT_MODE_ALL; else -> Player.REPEAT_MODE_OFF }
