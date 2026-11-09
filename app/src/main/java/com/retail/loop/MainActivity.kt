@@ -137,7 +137,7 @@ class MainActivity : ComponentActivity() {
         load()
     }
 
-    override fun onDestroy() { unregisterReceiver(mountReceiver); player.release(); cache.release(); super.onDestroy() }
+    override fun onDestroy() { runCatching { unregisterReceiver(mountReceiver) }; player.release(); super.onDestroy() }
 
     private fun clean(n: String) = n.substringBeforeLast('.').replace('_', ' ').replace('-', ' ')
 
@@ -224,8 +224,47 @@ class MainActivity : ComponentActivity() {
         window.decorView.systemUiVisibility = if (enabled) (android.view.View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or android.view.View.SYSTEM_UI_FLAG_FULLSCREEN or android.view.View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or android.view.View.SYSTEM_UI_FLAG_LAYOUT_STABLE or android.view.View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or android.view.View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN) else 0
     }
     private fun setSpeed(speed: Float) { playbackSpeed = speed; player.setPlaybackParameters(PlaybackParameters(speed)) }
-    private fun play(i: Int) { if (i in playlist.indices) { player.seekTo(i, 0); player.play(); current = i; playing = true } }
-    private fun seekBy(ms: Long) { val d = player.duration.takeIf { it > 0 } ?: return; player.seekTo((player.currentPosition + ms).coerceIn(0L, d)) }
+    private fun play(i: Int) {
+        if (i !in playlist.indices) return
+        runCatching {
+            player.seekTo(i, 0L)
+            player.play()
+            current = i
+            playing = true
+            playerError = ""
+        }.onFailure { playerError = "Video değiştirilemedi." }
+    }
+
+    private fun seekToPosition(position: Long) {
+        val duration = player.duration
+        if (player.currentMediaItem == null || duration <= 0L) return
+        runCatching { player.seekTo(position.coerceIn(0L, duration)) }
+            .onFailure { playerError = "İleri/geri sarma başarısız. Akış bağlantısını kontrol edin." }
+    }
+
+    private fun seekBy(ms: Long) {
+        if (player.currentMediaItem == null) return
+        val duration = player.duration
+        if (duration <= 0L) return
+        seekToPosition((player.currentPosition + ms).coerceIn(0L, duration))
+    }
+
+    private fun retryPlayback() {
+        val index = player.currentMediaItemIndex.takeIf { it >= 0 } ?: current
+        val position = player.currentPosition.coerceAtLeast(0L)
+        playerError = ""
+        runCatching {
+            if (player.mediaItemCount > 0) {
+                player.seekTo(index, position)
+                player.prepare()
+                player.play()
+            } else if (playlist.getOrNull(index) != null) {
+                player.setMediaItem(MediaItem.fromUri(playlist[index].uri!!), position)
+                player.prepare()
+                player.play()
+            }
+        }.onFailure { playerError = "Tekrar deneme başarısız." }
+    }
 
     private fun applyLoop() {
         player.repeatMode = when (loopMode) { 0 -> Player.REPEAT_MODE_ONE; 1 -> Player.REPEAT_MODE_ALL; else -> Player.REPEAT_MODE_OFF }
