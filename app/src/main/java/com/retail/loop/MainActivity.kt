@@ -31,6 +31,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -338,6 +340,8 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun Browser() {
         var section by remember { mutableStateOf("Genel Bakış") }
+        val firstNavFocus = remember { FocusRequester() }
+        LaunchedEffect(Unit) { firstNavFocus.requestFocus() }
         BoxWithConstraints(Modifier.fillMaxSize().background(Color(0xFF0D0F14))) {
             val compact = maxWidth < 760.dp
             val navWidth = if (compact) 176.dp else 236.dp
@@ -367,7 +371,7 @@ class MainActivity : ComponentActivity() {
                     Spacer(Modifier.height(34.dp))
                     Text("KÜTÜPHANE", color = Color(0xFF747B8C), fontSize = 9.sp, letterSpacing = 1.7.sp,
                         modifier = Modifier.padding(start = 10.dp, bottom = 10.dp))
-                    SidebarItem("Genel Bakış", "⌂", section == "Genel Bakış", compact) {
+                    SidebarItem("Genel Bakış", "⌂", section == "Genel Bakış", compact, firstNavFocus) {
                         section = "Genel Bakış"
                         if (stack.last().first != Config.FOLDER_ID) { stack.clear(); stack.add(Pair(Config.FOLDER_ID, Config.ROOT_TITLE)); load() }
                     }
@@ -458,13 +462,14 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun SidebarItem(label: String, symbol: String, selected: Boolean, compact: Boolean, click: () -> Unit) {
+    private fun SidebarItem(label: String, symbol: String, selected: Boolean, compact: Boolean, requester: FocusRequester? = null, click: () -> Unit) {
         var focused by remember { mutableStateOf(false) }
         val shape = RoundedCornerShape(10.dp)
         Row(
             Modifier.fillMaxWidth().padding(vertical = 3.dp)
                 .onFocusChanged { focused = it.isFocused }
                 .clip(shape)
+                .then(if (requester != null) Modifier.focusRequester(requester) else Modifier)
                 .background(when { focused -> Color(0xFF343B4A); selected -> Color(0xFF292F3D); else -> Color.Transparent })
                 .border(if (focused) 2.dp else 1.dp, if (focused) Color.White else if (selected) Color(0xFF41495B) else Color.Transparent, shape)
                 .focusable().clickable { click() }
