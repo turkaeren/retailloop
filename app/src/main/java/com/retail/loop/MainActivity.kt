@@ -460,18 +460,21 @@ class MainActivity : ComponentActivity() {
     @Volatile private var updateNotes = ""
     @Volatile private var updateChecking = false
     private var lastUpdateCheck = 0L
-    private var lastInstallPrompt = 0L
+    private var lastInstallPrompt by mutableLongStateOf(0L)
+    private fun versionName(): String = runCatching { packageManager.getPackageInfo(packageName, 0).versionName ?: "?" }.getOrDefault("?")
 
     private fun currentVersionCode(): Long = runCatching {
         androidx.core.content.pm.PackageInfoCompat.getLongVersionCode(packageManager.getPackageInfo(packageName, 0))
     }.getOrDefault(0L)
 
-    private fun checkUpdate() {
+    private fun checkUpdate(manual: Boolean = false) {
         val now = System.currentTimeMillis()
-        if (updateChecking || now - lastUpdateCheck < 30 * 60_000L) return
-        updateApk?.let { if (it.exists()) { maybeInstall(); return } }
+        if (updateChecking) { if (manual) toast("Kontrol zaten sürüyor…"); return }
+        if (!manual && now - lastUpdateCheck < 30 * 60_000L) return
+        updateApk?.let { if (it.exists()) { maybeInstall(); if (manual) toast("Güncelleme hazır, 'Yükle'ye basın"); return } }
         updateChecking = true
         lastUpdateCheck = now
+        if (manual) toast("Güncelleme kontrol ediliyor…")
         Thread {
             try {
                 val c = URL("https://api.github.com/repos/turkaeren/retailloop/releases/latest").openConnection() as java.net.HttpURLConnection
@@ -479,7 +482,8 @@ class MainActivity : ComponentActivity() {
                 c.setRequestProperty("Accept", "application/vnd.github+json")
                 val j = org.json.JSONObject(c.inputStream.bufferedReader().use { it.readText() })
                 val remote = j.getString("tag_name").substringAfterLast('.').toLongOrNull() ?: return@Thread
-                if (remote <= currentVersionCode()) return@Thread
+                if (remote <= currentVersionCode()) { if (manual) toast("Uygulama güncel · v" + versionName()); return@Thread }
+                if (manual) toast("Yeni sürüm bulundu, indiriliyor…")
                 updateTitle = j.getString("tag_name")
                 updateNotes = j.optString("body", "").trim().ifBlank { "Hata düzeltmeleri ve iyileştirmeler." }
                 val assets = j.getJSONArray("assets")
@@ -500,6 +504,7 @@ class MainActivity : ComponentActivity() {
                 updateApk = out
                 runOnUiThread { maybeInstall() }
             } catch (_: Exception) {
+                if (manual) toast("GitHub'a ulaşılamadı. İnternet ya da ağ engeli olabilir.")
             } finally { updateChecking = false }
         }.apply { name = "RetailLoop-Update"; isDaemon = true; start() }
     }
@@ -507,7 +512,6 @@ class MainActivity : ComponentActivity() {
     // Güncelleme hazırsa bildirim penceresini göster (oynatma sırasında değil).
     private fun maybeInstall() {
         if (updateApk?.exists() != true || updateInfo != null) return
-        if (playbackActive || System.currentTimeMillis() - lastInstallPrompt < 2 * 3600_000L) return
         updateInfo = Pair(updateTitle, updateNotes)
     }
 
@@ -815,7 +819,7 @@ class MainActivity : ComponentActivity() {
     // Açık klasörün listesi Drive'dan her 3 dakikada sessizce yenilenir; değişiklik varsa ekrana yansır.
     private val refreshHandler = Handler(Looper.getMainLooper())
     private val refreshTick = object : Runnable {
-        override fun run() { silentRefresh(); refreshHandler.postDelayed(this, 3 * 60_000L) }
+        override fun run() { silentRefresh(); checkUpdate(); refreshHandler.postDelayed(this, 3 * 60_000L) }
     }
     private fun silentRefresh() {
         val id = stack.last().first
@@ -1130,12 +1134,12 @@ class MainActivity : ComponentActivity() {
                 }
             }
             updateInfo?.let { (ver, notes) ->
-                if (!playerOpen) AlertDialog(
-                    onDismissRequest = { lastInstallPrompt = System.currentTimeMillis(); updateInfo = null },
+                if (!playerOpen && System.currentTimeMillis() - lastInstallPrompt > 2 * 3600_000L) AlertDialog(
+                    onDismissRequest = { lastInstallPrompt = System.currentTimeMillis() },
                     title = { Text("Yeni güncelleme var · $ver") },
                     text = { Text(notes.take(600), fontSize = 15.sp) },
                     confirmButton = { Button(onClick = { installNow() }) { Text("Yükle") } },
-                    dismissButton = { TextButton(onClick = { lastInstallPrompt = System.currentTimeMillis(); updateInfo = null }) { Text("Sonra") } }
+                    dismissButton = { TextButton(onClick = { lastInstallPrompt = System.currentTimeMillis() }) { Text("Sonra") } }
                 )
             }
         }
@@ -1233,6 +1237,7 @@ class MainActivity : ComponentActivity() {
                         kiosk = !kiosk
                         prefs.edit().putBoolean("kiosk", kiosk).apply()
                     }
+                    SidebarItem("Güncellemeyi kontrol et", "⟲", false, compact) { checkUpdate(true) }
                     SidebarItem(if (autoDownload) "TV'ye indir: açık" else "TV'ye indir: kapalı", "⬇", autoDownload, compact) {
                         autoDownload = !autoDownload
                         prefs.edit().putBoolean("autodl", autoDownload).apply()
@@ -1241,6 +1246,7 @@ class MainActivity : ComponentActivity() {
                     Spacer(Modifier.weight(1f))
                     Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 10.dp)) {
                         if (downloadStatus != "İndirme beklemede") Text(downloadStatus, color = Color(0xFF4DA3FF), fontSize = 9.sp, maxLines = 3, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(bottom = 6.dp))
+                        Text("Sürüm " + versionName(), color = Color(0xFF6B7282), fontSize = 9.sp, modifier = Modifier.padding(bottom = 4.dp))
                         Text(if (loading) "İÇERİKLER YÜKLENİYOR" else "KÜTÜPHANE HAZIR",
                             color = Color(0xFF858B9A), fontSize = 9.sp, letterSpacing = 1.1.sp)
                         if (kiosk) Text("Açılışta son videodan devam eder", color = Color(0xFF747B8C), fontSize = 9.sp, modifier = Modifier.padding(bottom = 5.dp))
@@ -1533,6 +1539,9 @@ class MainActivity : ComponentActivity() {
             val compact = maxWidth < 600.dp
             val side = if (compact) 12.dp else 28.dp
             AndroidView(factory = { PlayerView(it).apply { useController = false; this.player = this@MainActivity.player; isFocusable = false } }, modifier = Modifier.fillMaxSize())
+            if (overlay) updateInfo?.let { (ver, _) ->
+                Box(Modifier.align(Alignment.TopEnd).padding(20.dp)) { PlayerChip("⬆ $ver güncellemesini yükle", true) { stopPlay(); installNow() } }
+            }
             if (playerStatus.isNotBlank() && playerError.isBlank()) {
                 Text(playerStatus, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.align(Alignment.Center).background(Color(0x99000000), RoundedCornerShape(12.dp)).padding(horizontal = 22.dp, vertical = 14.dp))
