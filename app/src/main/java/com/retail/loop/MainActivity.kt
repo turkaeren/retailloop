@@ -785,7 +785,7 @@ class MainActivity : ComponentActivity() {
     private fun PlayerScreen() {
         var tick by remember { mutableIntStateOf(0) }
         var isSeeking by remember { mutableStateOf(false) }
-        var speedMenu by remember { mutableStateOf(false) }
+        var settingsMenu by remember { mutableStateOf(false) }
         LaunchedEffect(playing) {
             while (playing) {
                 if (!isSeeking) playPosition = player.currentPosition.coerceAtLeast(0L)
@@ -798,7 +798,7 @@ class MainActivity : ComponentActivity() {
         }
         BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black)) {
             val compact = maxWidth < 600.dp
-            val side = if (compact) 14.dp else 44.dp
+            val side = if (compact) 12.dp else 28.dp
             AndroidView(factory = { PlayerView(it).apply { useController = false; this.player = this@MainActivity.player; isFocusable = false } }, modifier = Modifier.fillMaxSize())
             if (playerStatus.isNotBlank() && playerError.isBlank()) {
                 Text(playerStatus, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold,
@@ -813,69 +813,62 @@ class MainActivity : ComponentActivity() {
                     PlayerChip("Harici oynatıcıda aç", true) { openInExternalPlayer() }
                 }
             }
-            // A tap anywhere on the video brings the YouTube-style controls back.
             Box(Modifier.fillMaxSize().pointerInput(overlay) {
                 detectTapGestures(onTap = { overlay = !overlay; tick++ })
             })
             AnimatedVisibility(overlay, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.BottomCenter)) {
                 Column(
                     Modifier.fillMaxWidth()
-                        .background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xF20A0C14))))
-                        .padding(start = side, end = side, top = if (compact) 44.dp else 72.dp, bottom = if (compact) 16.dp else 28.dp)
+                        .background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xE8090B11), Color(0xF5090B11))))
+                        .padding(start = side, end = side, top = if (compact) 10.dp else 14.dp, bottom = if (compact) 8.dp else 12.dp)
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text("ŞİMDİ OYNATILIYOR", color = Color(0xFF9AA3C0), fontSize = if (compact) 10.sp else 13.sp)
-                            Text(playlist.getOrNull(current)?.name ?: "", color = Color.White, fontSize = if (compact) 16.sp else 24.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        }
-
+                        Text(playlist.getOrNull(current)?.name ?: "", color = Color.White,
+                            fontSize = if (compact) 13.sp else 17.sp, fontWeight = FontWeight.SemiBold,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                        Text("${formatTime(playPosition)} / ${formatTime(playDuration)}",
+                            color = Color(0xFFBFC5D4), fontSize = if (compact) 10.sp else 12.sp)
                     }
-                    Spacer(Modifier.height(if (compact) 4.dp else 8.dp))
                     Slider(
                         value = if (playDuration > 0) playPosition.coerceIn(0L, playDuration).toFloat() else 0f,
                         onValueChange = { isSeeking = true; playPosition = it.toLong(); overlay = true },
                         onValueChangeFinished = { seekToPosition(playPosition.coerceIn(0L, playDuration)); isSeeking = false; tick++ },
                         valueRange = 0f..playDuration.coerceAtLeast(1L).toFloat(),
                         enabled = playDuration > 0L,
-                        modifier = Modifier.fillMaxWidth().height(if (compact) 28.dp else 36.dp)
+                        modifier = Modifier.fillMaxWidth().height(22.dp)
                     )
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Text(formatTime(playPosition), color = Color.White, fontSize = if (compact) 10.sp else 12.sp)
-                        Spacer(Modifier.weight(1f))
-                        Text(formatTime(playDuration), color = Color.White, fontSize = if (compact) 10.sp else 12.sp)
-                    }
-                    Spacer(Modifier.height(if (compact) 6.dp else 10.dp))
-                    Spacer(Modifier.height(if (compact) 8.dp else 14.dp))
-                    val st = rememberLazyListState()
-                    LaunchedEffect(overlay) { if (overlay) st.scrollToItem(current) }
-                    LazyRow(state = st, contentPadding = PaddingValues(horizontal = 4.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        itemsIndexed(playlist) { i, d -> PlaylistCard(i, d, i == current) { play(i); overlay = true; tick++ } }
-                    }
-                    Spacer(Modifier.height(if (compact) 8.dp else 14.dp))
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
                         if (playerError.isNotBlank()) PlayerChip("↻", false) { retryPlayback(); overlay = true; tick++ }
                         PlayerChip("⏮", false) { if (current > 0) play(current - 1); overlay = true; tick++ }
-                        PlayerChip("↶ 10", false) { seekBy(-10000); overlay = true; tick++ }
+                        PlayerChip("−10", false) { seekBy(-10000); overlay = true; tick++ }
                         PlayerChip(if (player.isPlaying) "Ⅱ" else "▶", true) { if (player.isPlaying) player.pause() else player.play(); overlay = true; tick++ }
-                        PlayerChip("10 ↷", false) { seekBy(10000); overlay = true; tick++ }
+                        PlayerChip("+10", false) { seekBy(10000); overlay = true; tick++ }
                         PlayerChip("⏭", false) { if (current < playlist.lastIndex) play(current + 1); overlay = true; tick++ }
-                        PlayerChip("■", false) { stopPlay() }
-                    }
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
                         Box {
-                            PlayerChip("${playbackSpeed}x", false) { speedMenu = true; tick++ }
-                            DropdownMenu(expanded = speedMenu, onDismissRequest = { speedMenu = false }) {
-                                listOf(0.25f, 0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f).forEach { speed ->
-                                    DropdownMenuItem(text = { Text("${speed}x") }, onClick = { setSpeed(speed); speedMenu = false; overlay = true; tick++ })
+                            PlayerChip("⚙", false) { settingsMenu = true; tick++ }
+                            DropdownMenu(expanded = settingsMenu, onDismissRequest = { settingsMenu = false }) {
+                                Text("OYNATMA HIZI", modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 4.dp),
+                                    color = Color.Gray, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f).forEach { speed ->
+                                    DropdownMenuItem(text = { Text("${speed}x" + if (playbackSpeed == speed) "  ✓" else "") },
+                                        onClick = { setSpeed(speed); settingsMenu = false; overlay = true; tick++ })
                                 }
+                                HorizontalDivider()
+                                DropdownMenuItem(
+                                    text = { Text(if (loopMode == 0) "Tekrar: Video" else if (loopMode == 1) "Tekrar: Liste" else "Tekrar: Kapalı") },
+                                    onClick = { loopMode = (loopMode + 1) % 3; applyLoop(); settingsMenu = false; overlay = true; tick++ }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(if (fullscreen) "Tam ekrandan çık" else "Tam ekran") },
+                                    onClick = { applyFullscreen(!fullscreen); settingsMenu = false; overlay = true; tick++ }
+                                )
+                                DropdownMenuItem(text = { Text("Oynatmayı durdur") },
+                                    onClick = { settingsMenu = false; stopPlay() })
                             }
                         }
-                        PlayerChip(if (loopMode == 0) "Tekrar: Video" else if (loopMode == 1) "Tekrar: Liste" else "Tekrar: Kapalı", false) { loopMode = (loopMode + 1) % 3; applyLoop(); overlay = true; tick++ }
-                        PlayerChip(if (fullscreen) "⤢" else "⛶", false) { applyFullscreen(!fullscreen); overlay = true; tick++ }
                     }
                 }
             }
-
         }
     }
 
@@ -925,8 +918,8 @@ class MainActivity : ComponentActivity() {
         Box(Modifier.onFocusChanged { f = it.isFocused }.scale(if (f) 1.08f else 1f)
             .clip(RoundedCornerShape(50)).background(if (on) Color(0xFF7C9CFF) else Color(0x33FFFFFF))
             .border(if (f) 3.dp else 0.dp, Color.White, RoundedCornerShape(50))
-            .focusable().clickable { click() }.padding(horizontal = 12.dp, vertical = 7.dp)) {
-            Text(t, color = if (on) Color(0xFF0A0C14) else Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+            .focusable().clickable { click() }.padding(horizontal = 9.dp, vertical = 5.dp)) {
+            Text(t, color = if (on) Color(0xFF0A0C14) else Color.White, fontSize = 11.sp, fontWeight = FontWeight.Medium)
         }
     }
 
