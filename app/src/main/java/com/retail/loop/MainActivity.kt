@@ -51,14 +51,8 @@ import androidx.media3.common.MimeTypes
 import androidx.media3.common.Player
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.database.StandaloneDatabaseProvider
-import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
-import androidx.media3.datasource.cache.CacheDataSource
-import androidx.media3.datasource.cache.CacheWriter
-import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
-import androidx.media3.datasource.cache.SimpleCache
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
@@ -66,7 +60,6 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.delay
 import org.json.JSONObject
-import java.io.File
 import java.net.URL
 import java.net.URLEncoder
 
@@ -75,8 +68,6 @@ data class Node(val id: String, val name: String, val folder: Boolean, val uri: 
 @UnstableApi
 class MainActivity : ComponentActivity() {
     private lateinit var player: ExoPlayer
-    private lateinit var cache: SimpleCache
-    private lateinit var dsFactory: CacheDataSource.Factory
     private val prefs by lazy { getSharedPreferences("p", MODE_PRIVATE) }
 
     private val nodes = mutableStateListOf<Node>()
@@ -104,14 +95,23 @@ class MainActivity : ComponentActivity() {
         super.onCreate(s)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         loopMode = prefs.getInt("loop", 1)
-        cache = SimpleCache(File(filesDir, "vid"), LeastRecentlyUsedCacheEvictor(Config.CACHE_GB * 1024L * 1024L * 1024L), StandaloneDatabaseProvider(this))
-        dsFactory = CacheDataSource.Factory().setCache(cache)
-            .setUpstreamDataSourceFactory(DefaultDataSource.Factory(this, DefaultHttpDataSource.Factory().setUserAgent("Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/120.0.0.0 Mobile Safari/537.36").setAllowCrossProtocolRedirects(true).setConnectTimeoutMs(30000).setReadTimeoutMs(30000)))
-            .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
-        val lc = DefaultLoadControl.Builder().setBufferDurationsMs(20000, 60000, 2000, 4000)
-            .setTargetBufferBytes(200 * 1024 * 1024).setPrioritizeTimeOverSizeThresholds(false).build()
+        val httpFactory = DefaultHttpDataSource.Factory()
+            .setUserAgent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/128.0.0.0 Safari/537.36")
+            .setAllowCrossProtocolRedirects(true)
+            .setConnectTimeoutMs(20000)
+            .setReadTimeoutMs(45000)
+            .setDefaultRequestProperties(mapOf("Referer" to "https://drive.google.com/", "Accept" to "*/*"))
+        val upstream = DefaultDataSource.Factory(this, httpFactory)
+        val lc = DefaultLoadControl.Builder()
+            .setBufferDurationsMs(15000, 50000, 1500, 3500)
+            .setTargetBufferBytes(64 * 1024 * 1024)
+            .setPrioritizeTimeOverSizeThresholds(true)
+            .build()
         val rf = DefaultRenderersFactory(this).setEnableDecoderFallback(true)
-        player = ExoPlayer.Builder(this, rf).setLoadControl(lc).setMediaSourceFactory(DefaultMediaSourceFactory(dsFactory)).build().apply { playWhenReady = true }
+        player = ExoPlayer.Builder(this, rf)
+            .setLoadControl(lc)
+            .setMediaSourceFactory(DefaultMediaSourceFactory(upstream))
+            .build().apply { playWhenReady = true }
         player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
             .setPreferredAudioMimeTypes(MimeTypes.AUDIO_E_AC3_JOC, MimeTypes.AUDIO_E_AC3, MimeTypes.AUDIO_AC3).build()
         player.addListener(object : Player.Listener {
