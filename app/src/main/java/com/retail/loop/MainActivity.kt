@@ -2,6 +2,12 @@ package com.retail.loop
 
 import android.Manifest
 import android.content.*
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.pdf.PdfRenderer
+import android.os.ParcelFileDescriptor
+import android.widget.ImageView
+import android.view.ViewGroup
 import android.text.Html
 import android.net.Uri
 import android.os.Build
@@ -75,7 +81,7 @@ import org.json.JSONObject
 import java.net.URL
 import java.net.URLEncoder
 
-data class Node(val id: String, val name: String, val folder: Boolean, val uri: Uri?, val pdf: Boolean = false)
+data class Node(val id: String, val name: String, val folder: Boolean, val uri: Uri?, val pdf: Boolean = false, val image: Boolean = false)
 
 @UnstableApi
 class MainActivity : ComponentActivity() {
@@ -109,6 +115,14 @@ class MainActivity : ComponentActivity() {
     private val retryHandler = Handler(Looper.getMainLooper())
     private var retryCount = 0
     private var retryPosition = 0L
+    private var viewerNode by mutableStateOf<Node?>(null)
+    private var viewerBitmap by mutableStateOf<Bitmap?>(null)
+    private var viewerPage by mutableIntStateOf(0)
+    private var viewerPageCount by mutableIntStateOf(1)
+    private var viewerError by mutableStateOf("")
+    private var pdfRenderer: PdfRenderer? = null
+    private var pdfDescriptor: ParcelFileDescriptor? = null
+    private var viewerLoadToken = 0
 
     private val mountReceiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context?, i: Intent?) { window.decorView.postDelayed({ if (stack.last().first == "usb") load() }, 2500) }
@@ -216,7 +230,7 @@ class MainActivity : ComponentActivity() {
         if (!::simpleCache.isInitialized) return
         prefetchCancelled = false
         prefetchThread?.interrupt()
-        val candidates = nodes.filter { !it.folder && !it.pdf && it.uri?.scheme == "https" }
+        val candidates = nodes.filter { !it.folder && !it.pdf && !it.image && it.uri?.scheme == "https" }
         if (candidates.isEmpty()) { downloadStatus = "İndirilecek video yok"; return }
         prefetchThread = Thread {
             var done = 0
@@ -266,9 +280,11 @@ class MainActivity : ComponentActivity() {
             val id = idMatch.groupValues.drop(1).firstOrNull { it.isNotBlank() } ?: continue
             if (name.isBlank()) continue
             val folder = link.contains("/folders/")
-            val isPdf = name.lowercase().endsWith(".pdf")
+            val lowerName = name.lowercase()
+            val isPdf = lowerName.endsWith(".pdf")
+            val isImage = listOf(".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp").any { lowerName.endsWith(it) }
             val uri = if (folder) null else Uri.parse("https://drive.usercontent.google.com/download?id=" + id + "&export=download&confirm=t")
-            if (result.none { it.id == id }) result += Node(id, clean(name), folder, uri, isPdf)
+            if (result.none { it.id == id }) result += Node(id, clean(name), folder, uri, isPdf, isImage)
         }
         return result
     }
@@ -289,7 +305,10 @@ class MainActivity : ComponentActivity() {
             contentResolver.query(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, arrayOf(MediaStore.Video.Media._ID, MediaStore.Video.Media.DISPLAY_NAME), null, null, "${MediaStore.Video.Media.DISPLAY_NAME} ASC")?.use { c ->
                 while (c.moveToNext()) l += Node(c.getLong(0).toString(), clean(c.getString(1)), false, Uri.withAppendedPath(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, c.getLong(0).toString()))
             }
-            nodes.clear(); nodes.addAll(l); message = if (l.isEmpty()) "Video bulunamadı. Flash belleği takın." else ""
+            contentResolver.query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, arrayOf(MediaStore.Images.Media._ID, MediaStore.Images.Media.DISPLAY_NAME), null, null, "${MediaStore.Images.Media.DISPLAY_NAME} ASC")?.use { c ->
+                while (c.moveToNext()) l += Node("img_" + c.getLong(0), clean(c.getString(1)), false, Uri.withAppendedPath(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, c.getLong(0).toString()), image = true)
+            }
+            nodes.clear(); nodes.addAll(l); message = if (l.isEmpty()) "Medya bulunamadı. Flash belleği takın." else ""
             return
         }
         fun show(txt: String) {
@@ -312,12 +331,8 @@ class MainActivity : ComponentActivity() {
     private fun open(n: Node) {
         playerError = ""
         if (n.folder) { stack.add(Pair(n.id, n.name)); load(); return }
-        if (n.pdf) {
-            try { startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(n.uri, "application/pdf").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
-            catch (_: Exception) { message = "PDF açmak için cihazda PDF görüntüleyici bulunamadı." }
-            return
-        }
-        val v = nodes.filter { !it.folder && !it.pdf }
+        if (n.pdf || n.image) { openDocument(n); return }
+        val v = nodes.filter { !it.folder && !it.pdf && !it.image }
         playlist.clear(); playlist.addAll(v)
         val i = v.indexOf(n).coerceAtLeast(0)
         val sourceFactory = DefaultMediaSourceFactory(cacheFactory)
