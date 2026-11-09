@@ -406,8 +406,18 @@ class MainActivity : ComponentActivity() {
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         // Controls hidden: down/OK shows them. When visible, Compose owns D-pad focus navigation.
         if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0 && playerOpen) {
+            when (event.keyCode) {
+                KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> { if (player.isPlaying) player.pause() else player.play(); overlay = true; playerUiActivity++; return true }
+                KeyEvent.KEYCODE_MEDIA_PLAY -> { player.play(); overlay = true; playerUiActivity++; return true }
+                KeyEvent.KEYCODE_MEDIA_PAUSE -> { player.pause(); overlay = true; playerUiActivity++; return true }
+                KeyEvent.KEYCODE_MEDIA_NEXT -> { if (current < playlist.lastIndex) play(current + 1); overlay = true; playerUiActivity++; return true }
+                KeyEvent.KEYCODE_MEDIA_PREVIOUS -> { if (current > 0) play(current - 1); overlay = true; playerUiActivity++; return true }
+                KeyEvent.KEYCODE_MEDIA_FAST_FORWARD, KeyEvent.KEYCODE_DPAD_RIGHT -> { seekBy(10000); overlay = true; playerUiActivity++; return true }
+                KeyEvent.KEYCODE_MEDIA_REWIND, KeyEvent.KEYCODE_DPAD_LEFT -> { seekBy(-10000); overlay = true; playerUiActivity++; return true }
+                KeyEvent.KEYCODE_MEDIA_STOP -> { stopPlay(); return true }
+            }
             if (overlay) playerUiActivity++
-            else if (event.keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+            else if (event.keyCode == KeyEvent.KEYCODE_DPAD_DOWN || event.keyCode == KeyEvent.KEYCODE_DPAD_UP || event.keyCode == KeyEvent.KEYCODE_DPAD_CENTER || event.keyCode == KeyEvent.KEYCODE_ENTER) {
                 overlay = true
                 return true
             }
