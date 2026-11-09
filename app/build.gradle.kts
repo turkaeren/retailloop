@@ -28,4 +28,5 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.9.2")
     implementation("androidx.media3:media3-exoplayer:1.4.1")
     implementation("androidx.media3:media3-ui:1.4.1")
+    implementation("com.google.guava:guava:33.2.1-android")
 }

@@ -153,6 +153,10 @@ class MainActivity : ComponentActivity() {
             .setConnectTimeoutMs(20000)
             .setReadTimeoutMs(45000)
             .setDefaultRequestProperties(mapOf("Referer" to "https://drive.google.com/", "Accept" to "*/*"))
+            .setContentTypePredicate(com.google.common.base.Predicate<String> { ct ->
+                val t = (ct ?: "").lowercase()
+                !(t.startsWith("text/") || t.contains("json") || t.contains("xml"))
+            })
         val upstream = DefaultDataSource.Factory(this, httpFactory)
         val freeBytes = filesDir.usableSpace.coerceAtLeast(256L * 1024 * 1024)
         val cacheLimit = minOf(24L * 1024 * 1024 * 1024, (freeBytes * 0.60).toLong()).coerceAtLeast(256L * 1024 * 1024)
@@ -189,6 +193,9 @@ class MainActivity : ComponentActivity() {
                 if (state == Player.STATE_READY) { playerStatus = ""; retryCount = 0 }
             }
             override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                if (error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED) {
+                    playlist.getOrNull(player.currentMediaItemIndex)?.uri?.let { u -> runCatching { simpleCache.removeResource(cacheKey(u)) } }
+                }
                 retryPosition = player.currentPosition.coerceAtLeast(0L)
                 if (retryCount < 6 && playerOpen) {
                     retryCount++
@@ -204,7 +211,9 @@ class MainActivity : ComponentActivity() {
                     }, waitMs)
                 } else {
                     val reason = error.cause?.message ?: error.message ?: "Bilinmeyen oynatma hatası"
-                    playerError = "Video açılamadı: ${error.errorCodeName}. $reason"
+                    playerError = if (error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED)
+                        "Dosya indirilemedi: Drive şu an bu videoya izin vermiyor olabilir (indirme sınırı) ya da dosya video değil. Birkaç dakika sonra tekrar dene."
+                    else "Video açılamadı: ${error.errorCodeName}. $reason"
                     playerStatus = ""
                     playing = false
                     overlay = true
@@ -212,6 +221,14 @@ class MainActivity : ComponentActivity() {
             }
         })
         applyLoop()
+        Thread {
+            runCatching {
+                simpleCache.keys.toList().forEach { k ->
+                    val l = simpleCache.getContentMetadata(k).get(androidx.media3.datasource.cache.ContentMetadata.KEY_CONTENT_LENGTH, -1L)
+                    if (l in 0L..1_000_000L) simpleCache.removeResource(k)
+                }
+            }
+        }.apply { isDaemon = true; start() }
         val mountFilter = IntentFilter().apply {
             addAction(Intent.ACTION_MEDIA_MOUNTED); addAction(Intent.ACTION_MEDIA_REMOVED); addAction(Intent.ACTION_MEDIA_EJECT); addDataScheme("file")
         }
@@ -242,7 +259,7 @@ class MainActivity : ComponentActivity() {
         if (n.uri == null || n.uri.scheme == "content" || !::simpleCache.isInitialized) return false
         val key = cacheKey(n.uri)
         val length = simpleCache.getContentMetadata(key).get(androidx.media3.datasource.cache.ContentMetadata.KEY_CONTENT_LENGTH, -1L)
-        return length > 0L && simpleCache.isCached(key, 0L, length)
+        return length > 1_000_000L && simpleCache.isCached(key, 0L, length)
     }
     // Kartın üstüne gelince videonun ilk 6 MB'ını önceden indir: açılış hızlanır.
     private fun warmUp(n: Node) {
@@ -259,6 +276,8 @@ class MainActivity : ComponentActivity() {
                     val w = CacheWriter(cacheFactory.createDataSource(), spec, null, null)
                     warmWriter = w
                     w.cache()
+                    val wl = simpleCache.getContentMetadata(cacheKey(uri)).get(androidx.media3.datasource.cache.ContentMetadata.KEY_CONTENT_LENGTH, -1L)
+                    if (wl in 0L..1_000_000L) simpleCache.removeResource(cacheKey(uri))
                 } catch (_: Exception) {
                 } finally { warmWriter = null }
             }
@@ -324,6 +343,8 @@ class MainActivity : ComponentActivity() {
                     val writer = CacheWriter(cacheFactory.createDataSource(), spec, null, null)
                     prefetchWriter = writer
                     writer.cache()
+                    val pl = simpleCache.getContentMetadata(key).get(androidx.media3.datasource.cache.ContentMetadata.KEY_CONTENT_LENGTH, -1L)
+                    if (pl in 0L..1_000_000L) { simpleCache.removeResource(key); throw java.io.IOException("Geçersiz yanıt") }
                     done++
                     if (gen == prefetchGen) runOnUiThread {
                         offlineReady[node.id] = isOfflineReady(node)
