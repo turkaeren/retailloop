@@ -132,6 +132,8 @@ class MainActivity : ComponentActivity() {
     private var kiosk by mutableStateOf(false)
     private var diagText by mutableStateOf("")
     private var lastErr by mutableStateOf("")
+    @Volatile private var bypassCache = false
+    private lateinit var playFactory: androidx.media3.datasource.DataSource.Factory
     @Volatile private var driveBlockedUntil = 0L
     private var pendingPlayId: String? = null
     private val warmHandler = Handler(Looper.getMainLooper())
@@ -162,6 +164,10 @@ class MainActivity : ComponentActivity() {
         cacheFactory = CacheDataSource.Factory().setCache(simpleCache).setUpstreamDataSourceFactory(upstream)
             .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
             .setCacheKeyFactory { spec -> spec.uri.getQueryParameter("id") ?: spec.key ?: spec.uri.toString() }
+        if (!prefs.getBoolean("wipe55", false)) {
+            runCatching { simpleCache.keys.toList().forEach { simpleCache.removeResource(it) } }
+            prefs.edit().putBoolean("wipe55", true).apply()
+        }
         val memMb = (getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager).memoryClass
         val bufMb = (memMb / 3).coerceIn(32, 96)
         val lc = DefaultLoadControl.Builder()
@@ -169,7 +175,8 @@ class MainActivity : ComponentActivity() {
             .setTargetBufferBytes(bufMb * 1024 * 1024)
             .setPrioritizeTimeOverSizeThresholds(true).build()
         val rf = DefaultRenderersFactory(this).setEnableDecoderFallback(true).forceEnableMediaCodecAsynchronousQueueing()
-        val sourceFactory = DefaultMediaSourceFactory(cacheFactory)
+        playFactory = androidx.media3.datasource.DataSource.Factory { if (bypassCache) upstream.createDataSource() else cacheFactory.createDataSource() }
+        val sourceFactory = DefaultMediaSourceFactory(playFactory)
         player = ExoPlayer.Builder(this, rf).setLoadControl(lc).setMediaSourceFactory(sourceFactory)
             .build().apply { playWhenReady = true; setSeekParameters(SeekParameters.CLOSEST_SYNC) }
         player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
@@ -183,7 +190,7 @@ class MainActivity : ComponentActivity() {
             }
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 playing = isPlaying
-                if (isPlaying) { playerError = ""; playerStatus = ""; retryCount = 0; diagText = ""; lastErr = "" }
+                if (isPlaying) { playerError = ""; playerStatus = ""; retryCount = 0; diagText = ""; lastErr = ""; bypassCache = false }
             }
             override fun onPlaybackStateChanged(state: Int) {
                 if (state == Player.STATE_BUFFERING) playerStatus = "Arabelleğe alınıyor…"
@@ -196,7 +203,8 @@ class MainActivity : ComponentActivity() {
                 retryPosition = player.currentPosition.coerceAtLeast(0L)
                 val ec = error.errorCode
                 if (ec == androidx.media3.common.PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED || ec == androidx.media3.common.PlaybackException.ERROR_CODE_IO_INVALID_HTTP_CONTENT_TYPE || ec == androidx.media3.common.PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS) {
-                    driveBlockedUntil = System.currentTimeMillis() + 10 * 60_000L
+                    bypassCache = true
+                    playlist.getOrNull(player.currentMediaItemIndex)?.uri?.let { u -> runCatching { simpleCache.removeResource(cacheKey(u)) } }
                     stopPrefetch()
                 }
                                 if (retryCount < 6 && playerOpen) {
@@ -493,7 +501,7 @@ class MainActivity : ComponentActivity() {
         playlist.clear(); playlist.addAll(v)
         val i = v.indexOf(n).coerceAtLeast(0)
         prefs.edit().putString("last_id", n.id).putString("last_folder", stack.last().first).putString("last_folder_name", stack.last().second).apply()
-        val sourceFactory = DefaultMediaSourceFactory(cacheFactory)
+        val sourceFactory = DefaultMediaSourceFactory(playFactory)
         val localFactory = DefaultMediaSourceFactory(DefaultDataSource.Factory(this))
         val mediaSources = v.map { node ->
             val item = mediaItemFor(node)
