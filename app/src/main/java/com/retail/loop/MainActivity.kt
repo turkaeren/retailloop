@@ -477,6 +477,81 @@ class MainActivity : ComponentActivity() {
         val f = localFile(n.id)
         return f.exists() && f.length() > 1_000_000L
     }
+    // Drive video yerine onay/uyarı sayfası döndürürse: sayfadaki "yine de indir" formunu bulup o adresle devam et.
+    @Volatile private var resolving = false
+    private fun diagnose(n: Node) {
+        val uri = n.uri ?: return
+        if (uri.scheme != "https" || resolving) return
+        resolving = true
+        val idx = player.currentMediaItemIndex
+        Thread {
+            var msg: String
+            try {
+                val c = URL(uri.toString()).openConnection() as java.net.HttpURLConnection
+                c.connectTimeout = 10000; c.readTimeout = 10000
+                c.setRequestProperty("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/128.0.0.0 Safari/537.36")
+                c.setRequestProperty("Referer", "https://drive.google.com/")
+                val code = c.responseCode
+                val ct = c.contentType ?: "?"
+                val stream = if (code in 200..399) c.inputStream else c.errorStream
+                if (ct.startsWith("text/html")) {
+                    val html = stream?.use { it.readNBytes(60000) }?.toString(Charsets.UTF_8) ?: ""
+                    c.disconnect()
+                    val form = Regex("(?is)<form[^>]*id=\"download-form\"[^>]*action=\"([^\"]+)\"[^>]*>(.*?)</form>").find(html)
+                    if (form != null) {
+                        val action = Html.fromHtml(form.groupValues[1], Html.FROM_HTML_MODE_LEGACY).toString()
+                        val q = Regex("(?i)<input[^>]*name=\"([^\"]+)\"[^>]*value=\"([^\"]*)\"").findAll(form.groupValues[2])
+                            .joinToString("&") { URLEncoder.encode(it.groupValues[1], "UTF-8") + "=" + URLEncoder.encode(Html.fromHtml(it.groupValues[2], Html.FROM_HTML_MODE_LEGACY).toString(), "UTF-8") }
+                        val fixed = Uri.parse(action + (if (action.contains("?")) "&" else "?") + q)
+                        runOnUiThread {
+                            retryHandler.removeCallbacksAndMessages(null)
+                            if (idx in 0 until player.mediaItemCount) {
+                                val it0 = player.getMediaItemAt(idx)
+                                player.replaceMediaItem(idx, it0.buildUpon().setUri(fixed).build())
+                                player.prepare(); player.play()
+                                playerStatus = "Drive onayı geçiliyor…"
+                            }
+                        }
+                        msg = "Drive onay sayfası bulundu, yeniden deneniyor"
+                    } else {
+                        val txt = html.replace(Regex("(?is)<(script|style)[^>]*>.*?</\\1>"), " ").replace(Regex("<[^>]*>"), " ").replace(Regex("\\s+"), " ").trim()
+                        msg = "Drive sayfası ($code): " + txt.take(220)
+                    }
+                } else {
+                    c.disconnect()
+                    msg = "HTTP $code · $ct"
+                }
+            } catch (e: Exception) { msg = "Kontrol hatası: " + e.javaClass.simpleName }
+            runOnUiThread { diagText = msg; resolving = false }
+        }.apply { isDaemon = true; start() }
+    }
+
+    // Kartın üstüne gelince videonun ilk 6 MB'ını önceden indir: açılış hızlanır.
+    private fun warmUp(n: Node) {
+        val uri = n.uri ?: return
+        if (n.folder || n.pdf || n.image || uri.scheme != "https" || playbackActive || offlineReady[n.id] == true || System.currentTimeMillis() < driveBlockedUntil) return
+        warmTask?.let { warmHandler.removeCallbacks(it) }
+        runCatching { warmWriter?.cancel() }
+        val g = ++warmGen
+        val t = Runnable {
+            warmExec.execute {
+                if (g != warmGen || playbackActive) return@execute
+                try {
+                    val spec = DataSpec.Builder().setUri(uri).setKey(cacheKey(uri)).setLength(6L * 1024 * 1024).build()
+                    val w = CacheWriter(cacheFactory.createDataSource(), spec, null, null)
+                    warmWriter = w
+                    w.cache()
+                    val wl = simpleCache.getContentMetadata(cacheKey(uri)).get(androidx.media3.datasource.cache.ContentMetadata.KEY_CONTENT_LENGTH, -1L)
+                    if (wl in 0L..1_000_000L) simpleCache.removeResource(cacheKey(uri))
+                } catch (_: Exception) {
+                } finally { warmWriter = null }
+            }
+        }
+        warmTask = t
+        warmHandler.postDelayed(t, 600)
+    }
+
+    // Çevrimdışı hazır durumunu arka planda hesapla; liste çizilirken önbelleğe dokunma.
     private fun refreshOffline() {
         val list = nodes.filter { !it.folder && !it.pdf && !it.image && it.uri?.scheme == "https" }
         if (list.isEmpty()) return
