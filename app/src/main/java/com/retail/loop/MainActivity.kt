@@ -140,6 +140,27 @@ class MainActivity : ComponentActivity() {
     private var kiosk by mutableStateOf(false)
     private var diagText by mutableStateOf("")
     private var lastErr by mutableStateOf("")
+    private var userMsg by mutableStateOf("")
+    private var quotaHit by mutableStateOf(false)
+
+    // Hata kodlarını son kullanıcıya anlaşılır Türkçe mesaja çevirir.
+    private fun friendlyError(code: Int): String {
+        return when (code) {
+            androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
+            androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT ->
+                "İnternet bağlantısı yok ya da çok yavaş. Bağlantı gelince otomatik denenecek."
+            androidx.media3.common.PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED,
+            androidx.media3.common.PlaybackException.ERROR_CODE_IO_INVALID_HTTP_CONTENT_TYPE,
+            androidx.media3.common.PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS ->
+                "Video şu an sunucudan alınamıyor. Biraz sonra tekrar denenecek."
+            androidx.media3.common.PlaybackException.ERROR_CODE_DECODING_FAILED,
+            androidx.media3.common.PlaybackException.ERROR_CODE_DECODER_INIT_FAILED,
+            androidx.media3.common.PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED ->
+                "Bu video biçimi bu TV'de oynatılamıyor."
+            else -> "Video şu an oynatılamıyor. Birazdan tekrar denenecek."
+        }
+    }
+    private val QUOTA_MSG = "Drive indirme limiti doldu. Limit açılınca videoyu TV'ye indirip yerelden oynatabilirsiniz."
     @Volatile private var bypassCache = false
     private lateinit var playFactory: androidx.media3.datasource.DataSource.Factory
     @Volatile private var driveBlockedUntil = 0L
@@ -200,7 +221,7 @@ class MainActivity : ComponentActivity() {
             }
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 playing = isPlaying
-                if (isPlaying) { playerError = ""; playerStatus = ""; retryCount = 0; diagText = ""; lastErr = ""; bypassCache = false }
+                if (isPlaying) { playerError = ""; playerStatus = ""; retryCount = 0; diagText = ""; lastErr = ""; userMsg = ""; quotaHit = false; bypassCache = false }
             }
             override fun onPlaybackStateChanged(state: Int) {
                 if (state == Player.STATE_BUFFERING) playerStatus = "Arabelleğe alınıyor…"
@@ -212,6 +233,7 @@ class MainActivity : ComponentActivity() {
                 }
                 retryPosition = player.currentPosition.coerceAtLeast(0L)
                 val ec = error.errorCode
+                if (!quotaHit) userMsg = friendlyError(ec)
                 if (ec == androidx.media3.common.PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED || ec == androidx.media3.common.PlaybackException.ERROR_CODE_IO_INVALID_HTTP_CONTENT_TYPE || ec == androidx.media3.common.PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS) {
                     bypassCache = true
                     playlist.getOrNull(player.currentMediaItemIndex)?.uri?.let { u -> runCatching { simpleCache.removeResource(cacheKey(u)) } }
@@ -232,10 +254,7 @@ class MainActivity : ComponentActivity() {
                         }
                     }, waitMs)
                 } else {
-                    val reason = error.cause?.message ?: error.message ?: "Bilinmeyen oynatma hatası"
-                    playerError = if (error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED)
-                        "Dosya indirilemedi: Drive şu an bu videoya izin vermiyor olabilir (indirme sınırı) ya da dosya video değil. Birkaç dakika sonra tekrar dene."
-                    else "Video açılamadı: ${error.errorCodeName}. $reason"
+                    playerError = if (quotaHit) QUOTA_MSG else friendlyError(error.errorCode)
                     playerStatus = ""
                     playing = false
                     overlay = true
@@ -603,6 +622,7 @@ class MainActivity : ComponentActivity() {
                         }
                         msg = "Drive onay sayfası bulundu, yeniden deneniyor"
                     } else {
+                        if (html.contains("Quota exceeded", true) || html.contains("Too many users", true)) runOnUiThread { quotaHit = true; userMsg = QUOTA_MSG }
                         val txt = html.replace(Regex("(?is)<(script|style)[^>]*>.*?</\\1>"), " ").replace(Regex("<[^>]*>"), " ").replace(Regex("\\s+"), " ").trim()
                         msg = "Drive sayfası ($code): " + txt.take(220)
                     }
@@ -814,6 +834,7 @@ class MainActivity : ComponentActivity() {
     private fun open(n: Node) {
         playerError = ""
         diagText = ""
+        userMsg = ""; quotaHit = false
         if (n.folder) { stack.add(Pair(n.id, n.name)); load(); return }
         if (n.pdf || n.image) { openDocument(n); return }
         val v = nodes.filter { !it.folder && !it.pdf && !it.image }
@@ -959,7 +980,7 @@ class MainActivity : ComponentActivity() {
                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             startActivity(Intent.createChooser(intent, "Videoyu hangi oynatıcıda açalım?"))
         } catch (_: Exception) {
-            playerError = "Bu kapsayıcı Media3 tarafından desteklenmiyor. VLC gibi uyumlu bir TV oynatıcı yükleyip tekrar deneyin."
+            playerError = "Bu video biçimi desteklenmiyor."
         }
     }
 
@@ -1288,7 +1309,7 @@ class MainActivity : ComponentActivity() {
     // Masaüstü tarzı sağ önizleme paneli: seçili öğenin büyük karesi, bilgisi ve hızlı işlemler.
     @Composable
     private fun PreviewPane(n: Node?) {
-        Column(Modifier.width(300.dp).fillMaxHeight().background(Brush.verticalGradient(listOf(Color(0xFF151925), Color(0xFF0D0F16)))).padding(20.dp)) {
+        Column(Modifier.width(190.dp).fillMaxHeight().background(Brush.verticalGradient(listOf(Color(0xFF151925), Color(0xFF0D0F16)))).padding(14.dp)) {
             if (n == null) {
                 Text("ÖNİZLEME", color = Color(0xFF747B8C), fontSize = 10.sp, letterSpacing = 1.7.sp)
                 Spacer(Modifier.height(10.dp))
@@ -1303,14 +1324,14 @@ class MainActivity : ComponentActivity() {
             }
             Text("ÖNİZLEME", color = Color(0xFF747B8C), fontSize = 10.sp, letterSpacing = 1.7.sp)
             Spacer(Modifier.height(12.dp))
-            Box(Modifier.fillMaxWidth().aspectRatio(16f / 10f).clip(RoundedCornerShape(14.dp))
+            Box(Modifier.fillMaxWidth().aspectRatio(16f / 10f).clip(RoundedCornerShape(10.dp))
                 .background(if (n.folder) Brush.linearGradient(listOf(Color(0xFF3B4C7A), Color(0xFF1A2038))) else Brush.linearGradient(listOf(c1, c2)))
                 .border(1.dp, Color(0x22FFFFFF), RoundedCornerShape(14.dp)), contentAlignment = Alignment.Center) {
                 if (thumb != null) Image(bitmap = thumb, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
-                else Text(if (n.folder) "▰" else if (n.pdf) "PDF" else if (n.image) "JPG" else "▶", color = Color(0x66FFFFFF), fontSize = 40.sp, fontWeight = FontWeight.Bold)
+                else Text(if (n.folder) "▰" else if (n.pdf) "PDF" else if (n.image) "JPG" else "▶", color = Color(0x66FFFFFF), fontSize = 26.sp, fontWeight = FontWeight.Bold)
             }
-            Spacer(Modifier.height(14.dp))
-            Text(n.name, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Bold, maxLines = 3, overflow = TextOverflow.Ellipsis, lineHeight = 21.sp)
+            Spacer(Modifier.height(10.dp))
+            Text(n.name, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 3, overflow = TextOverflow.Ellipsis, lineHeight = 16.sp)
             Spacer(Modifier.height(6.dp))
             Text(if (n.folder) "Klasör" else if (n.pdf) "PDF belgesi" else if (n.image) "Görsel" else "Video", color = Color(0xFF9298A7), fontSize = 12.sp)
             if (isVideo) {
@@ -1327,7 +1348,7 @@ class MainActivity : ComponentActivity() {
                 else PlayerChip("TV'ye indir", false) { manualDownload { listOf(n) } }
             }
             Spacer(Modifier.weight(1f))
-            Text("OK: aç  ·  OK'e basılı tut: menü", color = Color(0xFF6B7282), fontSize = 10.sp)
+            Text("OK: aç\nOK basılı: menü", color = Color(0xFF6B7282), fontSize = 9.sp, lineHeight = 12.sp)
         }
     }
 
@@ -1446,8 +1467,8 @@ class MainActivity : ComponentActivity() {
                 Text(playerStatus, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.align(Alignment.Center).background(Color(0x99000000), RoundedCornerShape(12.dp)).padding(horizontal = 22.dp, vertical = 14.dp))
             }
-            if (lastErr.isNotBlank() && (playerStatus.isNotBlank() || playerError.isNotBlank())) {
-                Text("HATA: " + lastErr + (if (diagText.isNotBlank()) "\n" + diagText else ""), color = Color(0xFFFFD28A), fontSize = 12.sp, textAlign = TextAlign.Center,
+            if (userMsg.isNotBlank() && playerStatus.isNotBlank() && playerError.isBlank()) {
+                Text(userMsg, color = Color(0xFFFFD28A), fontSize = 12.sp, textAlign = TextAlign.Center,
                     modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 36.dp, start = 24.dp, end = 24.dp)
                         .background(Color(0xAA000000), RoundedCornerShape(10.dp)).padding(horizontal = 14.dp, vertical = 8.dp))
             }
@@ -1457,7 +1478,8 @@ class MainActivity : ComponentActivity() {
                     Text(playerError, color = Color(0xFFFFAAB2), fontSize = 12.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 10.dp))
                     Text("Bağlantıyı yeniden kurmayı deneyebilirsin.", color = Color.LightGray, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
                     Spacer(Modifier.height(14.dp))
-                    PlayerChip("Harici oynatıcıda aç", true) { openInExternalPlayer() }
+                    if (quotaHit) { PlayerChip("TV'ye indir", true) { playlist.getOrNull(player.currentMediaItemIndex)?.let { cur -> manualDownload { listOf(cur) } } }; Spacer(Modifier.height(8.dp)) }
+                    PlayerChip("Harici oynatıcıda aç", false) { openInExternalPlayer() }
                 }
             }
             Box(Modifier.fillMaxSize().pointerInput(overlay) {
