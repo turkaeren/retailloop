@@ -462,7 +462,7 @@ class MainActivity : ComponentActivity() {
             nodes.clear()
             nodes.addAll(parse(txt))
             message = if (nodes.isEmpty()) "Klasör listelenemedi veya boş. Drive paylaşımını herkes görüntüleyebilir olarak kontrol edin." else ""
-            if (nodes.isNotEmpty()) { startFolderPrefetch(); refreshOffline() }
+            if (nodes.isNotEmpty()) refreshOffline()
             tryPending()
         }
         prefs.getString("f_$id", null)?.let { runCatching { show(it) } }
@@ -597,7 +597,6 @@ class MainActivity : ComponentActivity() {
         playing = false; playbackActive = false; playerOpen = false; overlay = false
         playerError = ""; playerStatus = ""; retryCount = 0
         if (fullscreen) applyFullscreen(false)
-        startFolderPrefetch()
     }
     private fun applyFullscreen(enabled: Boolean) {
         fullscreen = enabled
