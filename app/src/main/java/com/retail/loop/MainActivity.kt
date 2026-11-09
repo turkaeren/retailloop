@@ -982,6 +982,54 @@ class MainActivity : ComponentActivity() {
         viewerError = ""
     }
 
+    // PDF/görsel indirir: Drive hesabıyla, kota/onay sayfasını tanıyarak; sonucu kalıcı saklar (çevrimdışı açılır).
+    private fun fetchDocument(node: Node, file: File) {
+        val fresh = file.exists() && file.length() > 0 && System.currentTimeMillis() - file.lastModified() < 6 * 3600_000L
+        if (fresh) return
+        val anon = node.uri.toString()
+        var useApi = gdAccessToken() != null
+        var url = if (useApi) gdUrl(node.id) else anon
+        val ua = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/128.0.0.0 Safari/537.36"
+        try {
+            for (attempt in 0..3) {
+                val c = URL(url).openConnection() as java.net.HttpURLConnection
+                c.connectTimeout = 20000; c.readTimeout = 45000
+                c.setRequestProperty("User-Agent", ua)
+                c.setRequestProperty("Referer", "https://drive.google.com/")
+                if (useApi) gdAccessToken()?.let { c.setRequestProperty("Authorization", "Bearer $it") }
+                val code = c.responseCode
+                val ct = c.contentType ?: ""
+                if (code !in 200..299 || ct.startsWith("text/html")) {
+                    val body = runCatching { (if (code in 200..299) c.inputStream else c.errorStream)?.use { it.readNBytes(60000) }?.toString(Charsets.UTF_8) ?: "" }.getOrDefault("")
+                    c.disconnect()
+                    val quota = body.contains("uota", true) || body.contains("Too many users", true)
+                    if (useApi) { gdToken = if (code == 401) null else gdToken; useApi = false; url = anon; continue }
+                    if (quota) throw java.io.IOException("Drive indirme limiti doldu. Biraz sonra tekrar deneyin.")
+                    val form = Regex("(?is)<form[^>]*id=\"download-form\"[^>]*action=\"([^\"]+)\"[^>]*>(.*?)</form>").find(body)
+                    if (form != null) {
+                        val action = Html.fromHtml(form.groupValues[1], Html.FROM_HTML_MODE_LEGACY).toString()
+                        val q = Regex("(?i)<input[^>]*name=\"([^\"]+)\"[^>]*value=\"([^\"]*)\"").findAll(form.groupValues[2])
+                            .joinToString("&") { URLEncoder.encode(it.groupValues[1], "UTF-8") + "=" + URLEncoder.encode(Html.fromHtml(it.groupValues[2], Html.FROM_HTML_MODE_LEGACY).toString(), "UTF-8") }
+                        url = action + (if (action.contains("?")) "&" else "?") + q
+                        continue
+                    }
+                    throw java.io.IOException("Dosya Drive'dan alınamadı.")
+                }
+                val tmp = File(file.parentFile, file.name + ".tmp")
+                c.inputStream.use { input -> tmp.outputStream().use { input.copyTo(it) } }
+                c.disconnect()
+                if (tmp.length() == 0L) { tmp.delete(); throw java.io.IOException("Dosya boş geldi.") }
+                file.delete(); tmp.renameTo(file)
+                return
+            }
+            throw java.io.IOException("Dosya Drive'dan alınamadı.")
+        } catch (e: Exception) {
+            // Elde eski bir kopya varsa onu kullan.
+            if (file.exists() && file.length() > 0) return
+            throw e
+        }
+    }
+
     private fun openDocument(node: Node) {
         closeDocument()
         viewerNode = node
@@ -990,16 +1038,11 @@ class MainActivity : ComponentActivity() {
         val token = ++viewerLoadToken
         Thread {
             try {
-                val file = File(cacheDir, "viewer_" + node.id.replace(Regex("[^A-Za-z0-9_-]"), "_"))
+                val file = File(File(filesDir, "docs").apply { mkdirs() }, "doc_" + node.id.replace(Regex("[^A-Za-z0-9_-]"), "_"))
                 if (node.uri?.scheme == "content") {
                     contentResolver.openInputStream(node.uri)?.use { input -> file.outputStream().use { input.copyTo(it) } }
                 } else {
-                    val connection = URL(node.uri.toString()).openConnection()
-                    connection.connectTimeout = 20000
-                    connection.readTimeout = 45000
-                    connection.setRequestProperty("User-Agent", "Mozilla/5.0")
-                    connection.setRequestProperty("Referer", "https://drive.google.com/")
-                    connection.getInputStream().use { input -> file.outputStream().use { input.copyTo(it) } }
+                    fetchDocument(node, file)
                 }
                 if (node.pdf) {
                     val fd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
@@ -1010,11 +1053,12 @@ class MainActivity : ComponentActivity() {
                     viewerPageCount = renderer.pageCount
                     renderPdfPage(0)
                 } else {
-                    val bitmap = BitmapFactory.decodeFile(file.absolutePath) ?: error("Görsel dosyası okunamadı")
+                    val bitmap = BitmapFactory.decodeFile(file.absolutePath) ?: run { file.delete(); error("Görsel açılamadı. Dosya bozuk ya da desteklenmeyen bir biçimde.") }
                     runOnUiThread { if (token == viewerLoadToken) viewerBitmap = bitmap else bitmap.recycle() }
                 }
             } catch (e: Exception) {
-                runOnUiThread { if (token == viewerLoadToken) viewerError = e.message ?: "Dosya açılamadı" }
+                if (node.pdf && !(e is java.io.IOException && (e.message ?: "").startsWith("Drive"))) runCatching { File(File(filesDir, "docs"), "doc_" + node.id.replace(Regex("[^A-Za-z0-9_-]"), "_")).delete() }
+                runOnUiThread { if (token == viewerLoadToken) viewerError = if ((e.message ?: "").startsWith("Drive") || (e.message ?: "").startsWith("Dosya") || (e.message ?: "").startsWith("Görsel")) e.message!! else "Dosya açılamadı. İnternet bağlantısını kontrol edip tekrar deneyin." }
             }
         }.start()
     }
