@@ -330,6 +330,7 @@ class MainActivity : ComponentActivity() {
     private val manualBusy = java.util.concurrent.atomic.AtomicInteger(0)
     private val manualExec = java.util.concurrent.Executors.newSingleThreadExecutor()
     private var menuNode by mutableStateOf<Node?>(null)
+    private var focusedNode by mutableStateOf<Node?>(null)
 
     private fun toast(t: String) = runOnUiThread { android.widget.Toast.makeText(this, t, android.widget.Toast.LENGTH_LONG).show() }
 
@@ -1094,7 +1095,7 @@ class MainActivity : ComponentActivity() {
         LaunchedEffect(Unit) { firstNavFocus.requestFocus() }
         BoxWithConstraints(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFF11141D), Color(0xFF080A10))))) {
             val compact = maxWidth < 760.dp
-            val navWidth = if (compact) 176.dp else 236.dp
+            val navWidth = if (compact) 160.dp else 200.dp
             val videos = nodes.filter { !it.folder && !it.pdf && !it.image }
             val folders = nodes.filter { it.folder }
             val pdfs = nodes.filter { it.pdf }
@@ -1181,7 +1182,7 @@ class MainActivity : ComponentActivity() {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text(if (stack.size > 1) stack.last().second else section,
-                                color = Color.White, fontSize = if (compact) 24.sp else 32.sp, fontWeight = FontWeight.Bold)
+                                color = Color.White, fontSize = if (compact) 20.sp else 24.sp, fontWeight = FontWeight.Bold)
                             Text(
                                 when (section) {
                                     "Videolar" -> "İzlemeye hazır videolar"
@@ -1215,20 +1216,19 @@ class MainActivity : ComponentActivity() {
                         }
                     } else {
                         LazyVerticalGrid(
-                            columns = GridCells.Adaptive(if (compact) 280.dp else 340.dp),
+                            columns = GridCells.Adaptive(if (compact) 128.dp else 148.dp),
                             modifier = Modifier.fillMaxSize(),
-                            horizontalArrangement = Arrangement.spacedBy(18.dp),
-                            verticalArrangement = Arrangement.spacedBy(18.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
                             contentPadding = PaddingValues(top = 10.dp, bottom = 30.dp, start = 10.dp, end = 12.dp)
                         ) {
-                            val lastId = prefs.getString("last_id", null)
-                            val hero = if (section == "Genel Bakış" && stack.size == 1) (videos.firstOrNull { it.id == lastId } ?: videos.firstOrNull()) else null
-                            if (hero != null) item(key = "hero", span = { GridItemSpan(maxLineSpan) }) {
-                                Hero(hero, if (hero.id == lastId) "SON İZLENEN" else "ÖNE ÇIKAN")
-                            }
                             items(visible, key = { it.id }) { n -> Tile(n, compact) { open(n) } }
                         }
                     }
+                }
+                if (!compact) {
+                    Box(Modifier.width(1.dp).fillMaxHeight().background(Color(0xFF252936)))
+                    PreviewPane(focusedNode)
                 }
             }
         }
@@ -1285,6 +1285,52 @@ class MainActivity : ComponentActivity() {
         return Pair(Color.hsv(hue, 0.55f, 0.62f), Color.hsv((hue + 45f) % 360f, 0.75f, 0.22f))
     }
 
+    // Masaüstü tarzı sağ önizleme paneli: seçili öğenin büyük karesi, bilgisi ve hızlı işlemler.
+    @Composable
+    private fun PreviewPane(n: Node?) {
+        Column(Modifier.width(300.dp).fillMaxHeight().background(Brush.verticalGradient(listOf(Color(0xFF151925), Color(0xFF0D0F16)))).padding(20.dp)) {
+            if (n == null) {
+                Text("ÖNİZLEME", color = Color(0xFF747B8C), fontSize = 10.sp, letterSpacing = 1.7.sp)
+                Spacer(Modifier.height(10.dp))
+                Text("Bir öğeye gel, burada görünsün.", color = Color(0xFF9298A7), fontSize = 12.sp)
+                return@Column
+            }
+            val (c1, c2) = accentFor(n.id)
+            val isVideo = !n.folder && !n.pdf && !n.image
+            val thumb = thumbs[n.id]
+            LaunchedEffect(n.id, offlineReady[n.id]) {
+                if (isVideo && thumbs[n.id] == null && isOfflineReady(n)) kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { makeThumb(n) }?.let { thumbs[n.id] = it }
+            }
+            Text("ÖNİZLEME", color = Color(0xFF747B8C), fontSize = 10.sp, letterSpacing = 1.7.sp)
+            Spacer(Modifier.height(12.dp))
+            Box(Modifier.fillMaxWidth().aspectRatio(16f / 10f).clip(RoundedCornerShape(14.dp))
+                .background(if (n.folder) Brush.linearGradient(listOf(Color(0xFF3B4C7A), Color(0xFF1A2038))) else Brush.linearGradient(listOf(c1, c2)))
+                .border(1.dp, Color(0x22FFFFFF), RoundedCornerShape(14.dp)), contentAlignment = Alignment.Center) {
+                if (thumb != null) Image(bitmap = thumb, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                else Text(if (n.folder) "▰" else if (n.pdf) "PDF" else if (n.image) "JPG" else "▶", color = Color(0x66FFFFFF), fontSize = 40.sp, fontWeight = FontWeight.Bold)
+            }
+            Spacer(Modifier.height(14.dp))
+            Text(n.name, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Bold, maxLines = 3, overflow = TextOverflow.Ellipsis, lineHeight = 21.sp)
+            Spacer(Modifier.height(6.dp))
+            Text(if (n.folder) "Klasör" else if (n.pdf) "PDF belgesi" else if (n.image) "Görsel" else "Video", color = Color(0xFF9298A7), fontSize = 12.sp)
+            if (isVideo) {
+                Spacer(Modifier.height(4.dp))
+                val local = offlineReady[n.id] == true
+                Text(if (local) "✓ TV'de kayıtlı · internetsiz oynar" else dlProgress[n.id]?.let { "İndiriliyor %$it" } ?: "Akışla oynatılır",
+                    color = if (local) Color(0xFF4DA3FF) else Color(0xFFB9BECB), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            }
+            Spacer(Modifier.height(16.dp))
+            PlayerChip(if (n.folder) "Aç" else if (isVideo) "▶ Oynat" else "Görüntüle", true) { open(n) }
+            if (isVideo) {
+                Spacer(Modifier.height(8.dp))
+                if (offlineReady[n.id] == true) PlayerChip("TV'den sil", false) { deleteLocal(n) }
+                else PlayerChip("TV'ye indir", false) { manualDownload { listOf(n) } }
+            }
+            Spacer(Modifier.weight(1f))
+            Text("OK: aç  ·  OK'e basılı tut: menü", color = Color(0xFF6B7282), fontSize = 10.sp)
+        }
+    }
+
     @Composable
     private fun Hero(n: Node, label: String) {
         var focused by remember { mutableStateOf(false) }
@@ -1320,8 +1366,8 @@ class MainActivity : ComponentActivity() {
     private fun Tile(n: Node, compact: Boolean, click: () -> Unit) {
         var focused by remember { mutableStateOf(false) }
         var lastLong by remember { mutableLongStateOf(0L) }
-        val scale by animateFloatAsState(if (focused) 1.07f else 1f, label = "tile")
-        val shape = RoundedCornerShape(18.dp)
+        val scale by animateFloatAsState(if (focused) 1.05f else 1f, label = "tile")
+        val shape = RoundedCornerShape(12.dp)
         val (c1, c2) = accentFor(n.id)
         val isVideo = !n.folder && !n.pdf && !n.image
         val thumb = thumbs[n.id]
@@ -1334,8 +1380,8 @@ class MainActivity : ComponentActivity() {
             Modifier.fillMaxWidth().aspectRatio(16f / 10f)
                 .zIndex(if (focused) 1f else 0f)
                 .graphicsLayer { scaleX = scale; scaleY = scale }
-                .shadow(if (focused) 22.dp else 3.dp, shape, ambientColor = Color.Black, spotColor = if (focused) Color(0xFF7C9CFF) else Color.Black)
-                .onFocusChanged { focused = it.isFocused }
+                .shadow(if (focused) 14.dp else 2.dp, shape, ambientColor = Color.Black, spotColor = if (focused) Color(0xFF7C9CFF) else Color.Black)
+                .onFocusChanged { focused = it.isFocused; if (it.isFocused) focusedNode = n }
                 .onPreviewKeyEvent { ev ->
                     val k = ev.key
                     if (!n.pdf && !n.image && n.uri?.scheme != "content" && ev.type == KeyEventType.KeyDown && ev.nativeKeyEvent.isLongPress &&
@@ -1347,23 +1393,21 @@ class MainActivity : ComponentActivity() {
                 .focusable().clickable { if (System.currentTimeMillis() - lastLong > 1200) click() }
         ) {
             if (thumb != null) Image(bitmap = thumb, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
-            else Text(glyph, color = Color(0x55FFFFFF), fontSize = if (n.pdf || n.image) 38.sp else 56.sp, fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.Center))
+            else Text(glyph, color = Color(0x55FFFFFF), fontSize = if (n.pdf || n.image) 22.sp else 34.sp, fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.Center))
             Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0.35f to Color.Transparent, 1f to Color(0xE6000000))))
-            if (thumb != null && isVideo && focused) Box(Modifier.align(Alignment.Center).size(54.dp).clip(androidx.compose.foundation.shape.CircleShape).background(Color(0x99000000)), contentAlignment = Alignment.Center) {
+            if (thumb != null && isVideo && focused) Box(Modifier.align(Alignment.Center).size(36.dp).clip(androidx.compose.foundation.shape.CircleShape).background(Color(0x99000000)), contentAlignment = Alignment.Center) {
                 Text("▶", color = Color.White, fontSize = 22.sp)
             }
-            Text(kind, color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp,
-                modifier = Modifier.align(Alignment.TopStart).padding(10.dp).clip(RoundedCornerShape(6.dp)).background(Color(0x66000000)).padding(horizontal = 7.dp, vertical = 3.dp))
-            if (offlineReady[n.id] == true) Box(Modifier.align(Alignment.TopEnd).padding(10.dp).size(24.dp).clip(androidx.compose.foundation.shape.CircleShape).background(Color(0xFF2F8BFF)), contentAlignment = Alignment.Center) {
-                Text("✓", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+            Text(kind, color = Color.White, fontSize = 7.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp,
+                modifier = Modifier.align(Alignment.TopStart).padding(6.dp).clip(RoundedCornerShape(6.dp)).background(Color(0x66000000)).padding(horizontal = 7.dp, vertical = 3.dp))
+            if (offlineReady[n.id] == true) Box(Modifier.align(Alignment.TopEnd).padding(6.dp).size(18.dp).clip(androidx.compose.foundation.shape.CircleShape).background(Color(0xFF2F8BFF)), contentAlignment = Alignment.Center) {
+                Text("✓", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
             } else dlProgress[n.id]?.let {
-                Text("%$it", color = Color(0xFFFFD28A), fontSize = 11.sp, fontWeight = FontWeight.Bold,
-                    modifier = Modifier.align(Alignment.TopEnd).padding(10.dp).clip(RoundedCornerShape(6.dp)).background(Color(0x99000000)).padding(horizontal = 7.dp, vertical = 3.dp))
+                Text("%$it", color = Color(0xFFFFD28A), fontSize = 9.sp, fontWeight = FontWeight.Bold,
+                    modifier = Modifier.align(Alignment.TopEnd).padding(6.dp).clip(RoundedCornerShape(6.dp)).background(Color(0x99000000)).padding(horizontal = 7.dp, vertical = 3.dp))
             }
-            Column(Modifier.align(Alignment.BottomStart).padding(14.dp)) {
-                Text(n.name, color = Color.White, fontSize = if (compact) 13.sp else 15.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 18.sp)
-                if (offlineReady[n.id] == true) Text("TV'de kayıtlı", color = Color(0xFF7DB8FF), fontSize = 10.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 2.dp))
-            }
+            Text(n.name, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 13.sp,
+                modifier = Modifier.align(Alignment.BottomStart).padding(8.dp))
         }
     }
 
